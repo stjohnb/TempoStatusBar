@@ -1,0 +1,131 @@
+name: PR Verification
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  security-events: write
+  actions: read
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: '15.0'
+        
+    - name: Build project
+      run: |
+        xcodebuild -project TempoStatusBarApp.xcodeproj \
+          -scheme TempoStatusBarApp \
+          -configuration Debug \
+          -destination 'platform=macOS' \
+          build
+          
+    - name: Build for release
+      run: |
+        xcodebuild -project TempoStatusBarApp.xcodeproj \
+          -scheme TempoStatusBarApp \
+          -configuration Release \
+          -destination 'platform=macOS' \
+          build
+
+    - name: Build and archive
+      run: |
+        echo "Running integration tests..."
+        # Since this app doesn't have explicit tests yet,
+        # we'll do basic integration checks
+        
+        # Check if the app can be built and archived
+        xcodebuild -project TempoStatusBarApp.xcodeproj \
+          -scheme TempoStatusBarApp \
+          -configuration Release \
+          -destination 'platform=macOS' \
+          archive \
+          -archivePath ./build/TempoStatusBarApp.xcarchive
+          
+        echo "✅ App can be successfully archived"
+        
+    - name: Check app bundle structure
+      run: |
+        echo "Checking app bundle structure..."
+        if [ -d "./build/TempoStatusBarApp.xcarchive/Products/Applications/TempoStatusBarApp.app" ]; then
+          echo "✅ App bundle structure is correct"
+        else
+          echo "❌ App bundle structure is incorrect"
+          exit 1
+        fi 
+        
+    - name: Generate version from PR and SHA
+      id: version
+      run: |
+        echo "version=pr-${{ github.event.number }}-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+                  
+    - name: Create DMG
+      run: |
+        # Create a simple DMG structure
+        mkdir -p ./dmg/TempoStatusBarApp.app
+        cp -R ./build/TempoStatusBarApp.xcarchive/Products/Applications/TempoStatusBarApp.app ./dmg/
+        
+        # Create DMG (requires hdiutil)
+        hdiutil create -volname "TempoStatusBarApp" -srcfolder ./dmg -ov -format UDZO TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
+        
+    - name: Upload DMG artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: TempoStatusBarApp-${{ steps.version.outputs.version }}
+        path: TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
+        retention-days: 7
+        
+  code-quality:
+    name: Code Quality
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: '15.0'
+        
+    - name: Install SwiftLint
+      run: |
+        brew install swiftlint
+        
+    - name: Run SwiftLint
+      run: |
+        swiftlint lint --reporter github-actions-logging
+        
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always() && github.event_name == 'pull_request'
+      with:
+        sarif_file: 'trivy-results.sarif'
+      continue-on-error: true

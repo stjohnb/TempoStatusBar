@@ -1,0 +1,107 @@
+name: Main Verification
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  security-events: write
+  actions: read
+  contents: write
+
+jobs:
+  main-build:
+    name: Main Build
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: '15.0'
+        
+    - name: Generate version timestamp
+      id: version
+      run: |
+        echo "version=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+        
+    - name: Build main version
+      run: |
+        xcodebuild -project TempoStatusBarApp.xcodeproj \
+          -scheme TempoStatusBarApp \
+          -configuration Release \
+          -destination 'platform=macOS' \
+          build
+          
+    - name: Archive app
+      run: |
+        xcodebuild -project TempoStatusBarApp.xcodeproj \
+          -scheme TempoStatusBarApp \
+          -configuration Release \
+          -destination 'platform=macOS' \
+          archive \
+          -archivePath ./build/TempoStatusBarApp.xcarchive
+          
+    - name: Create DMG
+      run: |
+        # Create a simple DMG structure
+        mkdir -p ./dmg/TempoStatusBarApp.app
+        cp -R ./build/TempoStatusBarApp.xcarchive/Products/Applications/TempoStatusBarApp.app ./dmg/
+        
+        # Create DMG (requires hdiutil)
+        hdiutil create -volname "TempoStatusBarApp" -srcfolder ./dmg -ov -format UDZO TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
+        
+    - name: Upload DMG artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: TempoStatusBarApp-${{ steps.version.outputs.version }}
+        path: TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
+        
+  security-check:
+    name: Security Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+      continue-on-error: true
+
+  documentation-check:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+        
+    - name: Check for documentation
+      run: |
+        if [ -f "README.md" ]; then
+          echo "✅ README.md found"
+        else
+          echo "⚠️  README.md not found"
+        fi
+        
+        if [ -f "CONTRIBUTING.md" ]; then
+          echo "✅ CONTRIBUTING.md found"
+        else
+          echo "⚠️  CONTRIBUTING.md not found"
+        fi 
