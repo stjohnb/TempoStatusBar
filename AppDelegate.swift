@@ -93,6 +93,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             print("Debug: AppDelegate - Credentials changed, updating status bar...")
             self.updateStatusBar()
         }
+        
+        // Listen for worklog data refresh and update status bar immediately
+        NotificationCenter.default.addObserver(
+            forName: .worklogDataRefreshed,
+            object: nil,
+            queue: .main
+        ) { _ in
+            print("Debug: AppDelegate - Worklog data refreshed, updating status bar...")
+            self.updateStatusBar()
+        }
     }
     
 
