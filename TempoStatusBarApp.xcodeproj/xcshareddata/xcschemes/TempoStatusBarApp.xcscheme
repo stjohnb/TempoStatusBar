@@ -1,11 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Scheme
-   LastUpgradeVersion = "1640"
+   LastUpgradeVersion = "1500"
    version = "1.7">
    <BuildAction
       parallelizeBuildables = "YES"
-      buildImplicitDependencies = "YES"
-      buildArchitectures = "Automatic">
+      buildImplicitDependencies = "YES">
       <BuildActionEntries>
          <BuildActionEntry
             buildForTesting = "YES"
@@ -35,7 +34,7 @@
             parallelizable = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "0FDA30642E1C585A00B13C51"
+               BlueprintIdentifier = "0FDA30752E1C606A00B13C51"
                BuildableName = "TempoStatusBarAppTests.xctest"
                BlueprintName = "TempoStatusBarAppTests"
                ReferencedContainer = "container:TempoStatusBarApp.xcodeproj">
