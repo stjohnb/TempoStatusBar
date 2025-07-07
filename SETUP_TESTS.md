@@ -27,13 +27,14 @@
 
 ### 3. Configure Test Target
 
-1. **Select the test target** in the project navigator
-2. **Go to "Build Phases"**
-3. **Expand "Compile Sources"**
-4. **Verify** that both test files are listed
-5. **Go to "Build Settings"**
-6. **Search for "Test Host"**
-7. **Set "Test Host"** to `$(BUILT_PRODUCTS_DIR)/TempoStatusBarApp.app/Contents/MacOS/TempoStatusBarApp`
+1. **Select the test target** (`TempoStatusBarAppTests`) in the project navigator
+2. **Look for the "Build Phases" tab** in the editor area (it may be alongside "General", "Signing & Capabilities", "Build Settings", etc.)
+3. **If you don't see tabs, try selecting the project name first, then the test target**
+4. **Expand "Compile Sources"** in the Build Phases section
+5. **Verify** that both test files are listed
+6. **Go to "Build Settings"** tab
+7. **Search for "Test Host"**
+8. **Set "Test Host"** to `$(BUILT_PRODUCTS_DIR)/TempoStatusBarApp.app/Contents/MacOS/TempoStatusBarApp`
 
 ### 4. Configure Scheme
 
@@ -116,19 +117,25 @@ After setup, you should see **25 test methods** in the `WorklogStateManagerTests
 
 ### Common Issues
 
-1. **"No such module 'TempoStatusBarApp'"**
+1. **"Can't find Build Phases"**
+   - Make sure you've selected the test target (`TempoStatusBarAppTests`), not the project
+   - Look for tabs in the editor area: "General", "Signing & Capabilities", "Build Settings", "Build Phases"
+   - If you don't see tabs, try selecting the project name first, then the test target
+   - In newer Xcode versions, Build Phases might be in a different location - look for it in the target configuration
+
+2. **"No such module 'TempoStatusBarApp'"**
    - Ensure the test target has the main app target as a dependency
    - Check that `@testable import TempoStatusBarApp` is used in test files
 
-2. **"Test target not found"**
+3. **"Test target not found"**
    - Verify the test target is properly added to the scheme
    - Check that the test target is included in the project
 
-3. **"Build failed"**
+4. **"Build failed"**
    - Check that all required files are added to the test target
    - Verify that the main app target builds successfully
 
-4. **"Async test failures"**
+5. **"Async test failures"**
    - Ensure proper wait times for async operations
    - Check that `@MainActor` is used where required
 

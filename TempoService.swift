@@ -32,7 +32,7 @@ class WorklogStateManager: ObservableObject {
     var credentialManager: CredentialManagerProtocol = CredentialManager.shared
     var tempoService: TempoServiceProtocol = TempoService.shared
     
-    private init() {
+    init() {
         setupTimer()
         checkCredentialsAndRefresh()
     }
@@ -82,6 +82,14 @@ class WorklogStateManager: ObservableObject {
         latestWorklog = nil
         errorMessage = nil
         warningThreshold = 7
+    }
+    
+    func resetForTesting() {
+        clearData()
+        hasCredentials = false
+        isLoading = false
+        refreshTimer?.invalidate()
+        refreshTimer = nil
     }
     
     func loadTempoData() async {

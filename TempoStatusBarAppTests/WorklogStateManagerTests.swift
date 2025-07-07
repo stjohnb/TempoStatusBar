@@ -11,9 +11,12 @@ final class WorklogStateManagerTests: XCTestCase {
     
     override func setUp() {
         super.setUp()
-        stateManager = WorklogStateManager()
+        stateManager = WorklogStateManager.shared
         mockCredentialManager = MockCredentialManager()
         mockTempoService = MockTempoService()
+        
+        // Reset state manager for testing
+        stateManager.resetForTesting()
         
         // Inject mocks
         stateManager.credentialManager = mockCredentialManager
@@ -118,6 +121,7 @@ final class WorklogStateManagerTests: XCTestCase {
             warningThreshold: 7
         )
         mockCredentialManager.mockCredentials = credentials
+        stateManager.hasCredentials = true
         
         let worklog = Worklog(
             dateStarted: "2024-01-15T10:00:00.000",
@@ -161,6 +165,7 @@ final class WorklogStateManagerTests: XCTestCase {
         )
         mockCredentialManager.mockCredentials = credentials
         mockCredentialManager.loadCredentialsError = CredentialError.noStoredCredentials
+        stateManager.hasCredentials = true
         
         // When
         await stateManager.loadTempoData()
@@ -182,6 +187,7 @@ final class WorklogStateManagerTests: XCTestCase {
         )
         mockCredentialManager.mockCredentials = credentials
         mockTempoService.mockError = TempoError.unauthorized
+        stateManager.hasCredentials = true
         
         // When
         await stateManager.loadTempoData()
@@ -202,6 +208,7 @@ final class WorklogStateManagerTests: XCTestCase {
         )
         mockCredentialManager.mockCredentials = credentials
         mockTempoService.mockError = TempoError.networkError
+        stateManager.hasCredentials = true
         
         // When
         await stateManager.loadTempoData()
@@ -379,6 +386,7 @@ final class WorklogStateManagerTests: XCTestCase {
         )
         mockCredentialManager.mockCredentials = credentials
         mockCredentialManager.loadCredentialsError = CredentialError.noStoredCredentials
+        stateManager.hasCredentials = true
         
         // When
         await stateManager.loadTempoData()
@@ -398,6 +406,7 @@ final class WorklogStateManagerTests: XCTestCase {
         )
         mockCredentialManager.mockCredentials = credentials
         mockTempoService.mockError = TempoError.unauthorized
+        stateManager.hasCredentials = true
         
         // When
         await stateManager.loadTempoData()
@@ -417,6 +426,7 @@ final class WorklogStateManagerTests: XCTestCase {
         )
         mockCredentialManager.mockCredentials = credentials
         mockTempoService.mockError = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "Test error"])
+        stateManager.hasCredentials = true
         
         // When
         await stateManager.loadTempoData()
