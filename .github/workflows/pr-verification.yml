@@ -41,11 +41,9 @@ jobs:
 
     - name: Run unit tests
       run: |
-        echo "🧪 Running unit tests..."
-        xcodebuild test -project TempoStatusBarApp.xcodeproj \
-          -scheme TempoStatusBarApp \
-          -destination 'platform=macOS' \
-          -resultBundlePath ./test-results.xcresult
+        echo "🧪 Running unit tests using local test script..."
+        chmod +x ./run_tests.sh
+        ./run_tests.sh
         
         echo "✅ Unit tests completed successfully"
 
