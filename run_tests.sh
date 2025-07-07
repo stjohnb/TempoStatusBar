@@ -23,15 +23,9 @@ if ! command -v xcodebuild &> /dev/null; then
 fi
 
 # Check if test files exist
-if [ ! -f "WorklogStateManagerTests.swift" ]; then
-    echo "❌ Error: WorklogStateManagerTests.swift not found"
-    echo "   Please ensure the test files are in the project directory"
-    exit 1
-fi
-
-if [ ! -f "TempoStatusBarAppTests.swift" ]; then
-    echo "❌ Error: TempoStatusBarAppTests.swift not found"
-    echo "   Please ensure the test files are in the project directory"
+if [ ! -f "TempoStatusBarAppTests/WorklogStateManagerTests.swift" ]; then
+    echo "❌ Error: WorklogStateManagerTests.swift not found in TempoStatusBarAppTests directory"
+    echo "   Please ensure the test files are in the TempoStatusBarAppTests directory"
     exit 1
 fi
 
@@ -56,24 +50,24 @@ echo ""
 
 # Try to run tests
 echo "🧪 Running tests..."
-if xcodebuild test -scheme TempoStatusBarApp -destination 'platform=macOS' 2>&1 | grep -q "Test Suite.*passed"; then
+# Remove existing test results if they exist
+rm -rf test-results.xcresult 2>/dev/null || true
+
+if xcodebuild test -scheme TempoStatusBarApp -destination 'platform=macOS' -resultBundlePath ./test-results.xcresult 2>&1 | grep -q "Test Suite.*passed"; then
     echo "✅ Tests ran successfully!"
     echo ""
     echo "📊 Test Results:"
     xcodebuild test -scheme TempoStatusBarApp -destination 'platform=macOS' 2>&1 | grep -E "(Test Suite|Test Case|passed|failed)" || true
+    echo ""
+    echo "📁 Test results saved to: test-results.xcresult"
+    echo "🔍 Open test-results.xcresult in Xcode to view detailed results"
 else
-    echo "❌ Tests failed to run or scheme not configured for testing"
+    echo "❌ Tests failed to run"
     echo ""
-    echo "🔧 Setup Required:"
-    echo "   The test target needs to be configured in Xcode."
-    echo "   Please follow the instructions in SETUP_TESTS.md"
-    echo ""
-    echo "📋 Quick Setup Steps:"
-    echo "   1. Open TempoStatusBarApp.xcodeproj in Xcode"
-    echo "   2. Add a new Unit Testing Bundle target named 'TempoStatusBarAppTests'"
-    echo "   3. Add WorklogStateManagerTests.swift and TempoStatusBarAppTests.swift to the test target"
-    echo "   4. Configure the scheme to include the test target"
-    echo "   5. Run tests with Cmd+U in Xcode"
+    echo "🔧 Troubleshooting:"
+    echo "   - Ensure Xcode is properly installed"
+    echo "   - Check that the test target is configured correctly"
+    echo "   - Verify that test files are included in the test target"
     echo ""
     echo "📖 For detailed instructions, see SETUP_TESTS.md"
 fi
@@ -99,14 +93,14 @@ else
 fi
 
 echo ""
-echo "🎯 Expected Test Coverage:"
-echo "   - 25 test methods in WorklogStateManagerTests"
+echo "🎯 Test Coverage:"
+echo "   - WorklogStateManagerTests: Comprehensive state management testing"
 echo "   - Initial state validation"
-echo "   - Credential management"
-echo "   - Data loading scenarios"
-echo "   - Computed properties"
-echo "   - Error handling"
-echo "   - State management"
+echo "   - Credential management scenarios"
+echo "   - Data loading and error handling"
+echo "   - Computed properties (status emoji, color, tooltip)"
+echo "   - State clearing and refresh functionality"
+echo "   - Mock service integration"
 echo ""
 
 echo "✨ Test runner completed!" 
