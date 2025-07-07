@@ -115,4 +115,5 @@ enum CredentialError: Error, LocalizedError {
 // Notification name for credential changes
 extension Notification.Name {
     static let credentialsChanged = Notification.Name("credentialsChanged")
+    static let worklogDataRefreshed = Notification.Name("worklogDataRefreshed")
 } 

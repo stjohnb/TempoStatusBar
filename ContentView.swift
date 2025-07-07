@@ -218,6 +218,9 @@ struct ContentView: View {
                     isLoading = false
                     latestWorklog = worklog
                     daysSinceLastWorklog = days
+                    
+                    // Notify AppDelegate to update the status bar
+                    NotificationCenter.default.post(name: .worklogDataRefreshed, object: nil)
                 }
             } catch {
                 await MainActor.run {
