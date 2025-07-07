@@ -1,6 +1,18 @@
 import Foundation
 import SwiftUI
 
+// MARK: - Protocols for Dependency Injection
+
+protocol CredentialManagerProtocol {
+    func hasStoredCredentials() -> Bool
+    func loadCredentials() throws -> CredentialManager.Credentials
+}
+
+protocol TempoServiceProtocol {
+    func fetchLatestWorklog(apiToken: String, jiraURL: String, accountId: String?) async throws -> Worklog?
+    func getDaysSinceLastWorklog(apiToken: String, jiraURL: String, accountId: String?) async -> Int?
+}
+
 // MARK: - Centralized State Management
 
 @MainActor
@@ -15,6 +27,10 @@ class WorklogStateManager: ObservableObject {
     @Published var warningThreshold = 7
     
     private var refreshTimer: Timer?
+    
+    // Dependency injection for testing
+    var credentialManager: CredentialManagerProtocol = CredentialManager.shared
+    var tempoService: TempoServiceProtocol = TempoService.shared
     
     private init() {
         setupTimer()
@@ -34,11 +50,11 @@ class WorklogStateManager: ObservableObject {
     }
     
     func checkCredentialsAndRefresh() {
-        hasCredentials = CredentialManager.shared.hasStoredCredentials()
+        hasCredentials = credentialManager.hasStoredCredentials()
         if hasCredentials {
             // Load the warning threshold from credentials
             do {
-                let credentials = try CredentialManager.shared.loadCredentials()
+                let credentials = try credentialManager.loadCredentials()
                 warningThreshold = credentials.warningThreshold
             } catch {
                 // If we can't load credentials, use default value
@@ -61,31 +77,31 @@ class WorklogStateManager: ObservableObject {
         }
     }
     
-    private func clearData() {
+    func clearData() {
         daysSinceLastWorklog = nil
         latestWorklog = nil
         errorMessage = nil
         warningThreshold = 7
     }
     
-    private func loadTempoData() async {
+    func loadTempoData() async {
         guard hasCredentials else { return }
         
         isLoading = true
         errorMessage = nil
         
         do {
-            let credentials = try CredentialManager.shared.loadCredentials()
+            let credentials = try credentialManager.loadCredentials()
             
             // Fetch the actual worklog data
-            let worklog = try await TempoService.shared.fetchLatestWorklog(
+            let worklog = try await tempoService.fetchLatestWorklog(
                 apiToken: credentials.apiToken,
                 jiraURL: credentials.jiraURL,
                 accountId: credentials.accountId.isEmpty ? nil : credentials.accountId
             )
             
             // Calculate days since last worklog
-            let days = await TempoService.shared.getDaysSinceLastWorklog(
+            let days = await tempoService.getDaysSinceLastWorklog(
                 apiToken: credentials.apiToken,
                 jiraURL: credentials.jiraURL,
                 accountId: credentials.accountId.isEmpty ? nil : credentials.accountId
@@ -189,7 +205,7 @@ struct UserInfo: Codable {
     }
 }
 
-class TempoService {
+class TempoService: TempoServiceProtocol {
     static let shared = TempoService()
     private init() {}
     

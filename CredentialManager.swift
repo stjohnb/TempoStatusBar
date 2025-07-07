@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-class CredentialManager {
+class CredentialManager: CredentialManagerProtocol {
     static let shared = CredentialManager()
     
     private let userDefaultsKey = "TempoStatusBarApp_Credentials"
