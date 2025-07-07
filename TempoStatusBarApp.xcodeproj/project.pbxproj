@@ -14,18 +14,7 @@
 		A1234567890123456789013G /* CredentialManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1234567890123456789013H /* CredentialManager.swift */; };
 /* End PBXBuildFile section */
 
-/* Begin PBXContainerItemProxy section */
-		0FDA307A2E1C606A00B13C51 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = A1234567890123456789015D /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = A1234567890123456789014F;
-			remoteInfo = TempoStatusBarApp;
-		};
-/* End PBXContainerItemProxy section */
-
 /* Begin PBXFileReference section */
-		0FDA30762E1C606A00B13C51 /* TempoStatusBarAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TempoStatusBarAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1234567890123456789012D /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A1234567890123456789012F /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		A1234567890123456789013B /* TempoService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TempoService.swift; sourceTree = "<group>"; };
@@ -34,18 +23,7 @@
 		A1234567890123456789014A /* TempoStatusBarApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TempoStatusBarApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedRootGroup section */
-		0FDA30772E1C606A00B13C51 /* TempoStatusBarAppTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = TempoStatusBarAppTests; sourceTree = "<group>"; };
-/* End PBXFileSystemSynchronizedRootGroup section */
-
 /* Begin PBXFrameworksBuildPhase section */
-		0FDA30732E1C606A00B13C51 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		A1234567890123456789014B /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -71,7 +49,6 @@
 			isa = PBXGroup;
 			children = (
 				A1234567890123456789014A /* TempoStatusBarApp.app */,
-				0FDA30762E1C606A00B13C51 /* TempoStatusBarAppTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -80,7 +57,6 @@
 			isa = PBXGroup;
 			children = (
 				A1234567890123456789014C,
-				0FDA30772E1C606A00B13C51 /* TempoStatusBarAppTests */,
 				A1234567890123456789014D /* Products */,
 			);
 			sourceTree = "<group>";
@@ -88,29 +64,6 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		0FDA30752E1C606A00B13C51 /* TempoStatusBarAppTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 0FDA307E2E1C606A00B13C51 /* Build configuration list for PBXNativeTarget "TempoStatusBarAppTests" */;
-			buildPhases = (
-				0FDA30722E1C606A00B13C51 /* Sources */,
-				0FDA30732E1C606A00B13C51 /* Frameworks */,
-				0FDA30742E1C606A00B13C51 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				0FDA307B2E1C606A00B13C51 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				0FDA30772E1C606A00B13C51 /* TempoStatusBarAppTests */,
-			);
-			name = TempoStatusBarAppTests;
-			packageProductDependencies = (
-			);
-			productName = TempoStatusBarAppTests;
-			productReference = 0FDA30762E1C606A00B13C51 /* TempoStatusBarAppTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
 		A1234567890123456789014F /* TempoStatusBarApp */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A1234567890123456789015A /* Build configuration list for PBXNativeTarget "TempoStatusBarApp" */;
@@ -138,10 +91,6 @@
 				LastSwiftUpdateCheck = 1640;
 				LastUpgradeCheck = 1500;
 				TargetAttributes = {
-					0FDA30752E1C606A00B13C51 = {
-						CreatedOnToolsVersion = 16.4;
-						TestTargetID = A1234567890123456789014F;
-					};
 					A1234567890123456789014F = {
 						CreatedOnToolsVersion = 15.0;
 					};
@@ -161,19 +110,11 @@
 			projectRoot = "";
 			targets = (
 				A1234567890123456789014F /* TempoStatusBarApp */,
-				0FDA30752E1C606A00B13C51 /* TempoStatusBarAppTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		0FDA30742E1C606A00B13C51 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		A1234567890123456789015C /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -184,13 +125,6 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		0FDA30722E1C606A00B13C51 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		A1234567890123456789015B /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -205,49 +139,7 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
-/* Begin PBXTargetDependency section */
-		0FDA307B2E1C606A00B13C51 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = A1234567890123456789014F /* TempoStatusBarApp */;
-			targetProxy = 0FDA307A2E1C606A00B13C51 /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
-
 /* Begin XCBuildConfiguration section */
-		0FDA307C2E1C606A00B13C51 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 15.4;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = stjohnb.TempoStatusBarAppTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TempoStatusBarApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/TempoStatusBarApp";
-			};
-			name = Debug;
-		};
-		0FDA307D2E1C606A00B13C51 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 15.4;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = stjohnb.TempoStatusBarAppTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TempoStatusBarApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/TempoStatusBarApp";
-			};
-			name = Release;
-		};
 		A1234567890123456789015F /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -419,15 +311,6 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		0FDA307E2E1C606A00B13C51 /* Build configuration list for PBXNativeTarget "TempoStatusBarAppTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				0FDA307C2E1C606A00B13C51 /* Debug */,
-				0FDA307D2E1C606A00B13C51 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		A1234567890123456789015A /* Build configuration list for PBXNativeTarget "TempoStatusBarApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
