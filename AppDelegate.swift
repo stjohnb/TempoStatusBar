@@ -1,10 +1,12 @@
 import Cocoa
 import SwiftUI
+import Combine
 
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusBarItem: NSStatusItem!
     var popover: NSPopover!
-    var timer: Timer?
+    private let stateManager = WorklogStateManager.shared
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Add minimal main menu with Edit > Paste
@@ -30,7 +32,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
 
         setupStatusBar()
-        setupTimer()
+        setupStateObserver()
         setupCredentialObserver()
     }
     
@@ -72,14 +74,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentViewController = NSHostingController(rootView: ContentView())
     }
     
-    func setupTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
-            self.updateStatusBar()
+    func setupStateObserver() {
+        // Use Combine to observe the state manager changes
+        Task {
+            for await _ in stateManager.$daysSinceLastWorklog.values {
+                updateStatusBarDisplay()
+            }
         }
         
-        // Add a small delay for the initial update to ensure app is fully initialized
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            self.updateStatusBar()
+        Task {
+            for await _ in stateManager.$errorMessage.values {
+                updateStatusBarDisplay()
+            }
+        }
+        
+        Task {
+            for await _ in stateManager.$hasCredentials.values {
+                updateStatusBarDisplay()
+            }
         }
     }
     
@@ -91,21 +103,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { _ in
             print("Debug: AppDelegate - Credentials changed, updating status bar...")
-            self.updateStatusBar()
-        }
-        
-        // Listen for worklog data refresh and update status bar immediately
-        NotificationCenter.default.addObserver(
-            forName: .worklogDataRefreshed,
-            object: nil,
-            queue: .main
-        ) { _ in
-            print("Debug: AppDelegate - Worklog data refreshed, updating status bar...")
-            self.updateStatusBar()
+            Task { @MainActor in
+                self.stateManager.checkCredentialsAndRefresh()
+            }
         }
     }
-    
-
     
     @objc func showStatus() {
         if let button = statusBarItem.button {
@@ -132,7 +134,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 queue: .main
             ) { _ in
                 // Refresh the status bar when settings popover is closed
-                self.updateStatusBar()
+                Task { @MainActor in
+                    self.stateManager.checkCredentialsAndRefresh()
+                }
                 // Remove the observer to avoid memory leaks
                 NotificationCenter.default.removeObserver(self, name: NSPopover.didCloseNotification, object: settingsPopover)
             }
@@ -145,101 +149,48 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.terminate(nil)
     }
     
-    func updateStatusBar() {
-        Task {
-            do {
-                print("Debug: AppDelegate - Loading credentials...")
-                let credentials = try CredentialManager.shared.loadCredentials()
-                print("Debug: AppDelegate - Credentials loaded successfully")
-                
-                print("Debug: AppDelegate - Fetching days since last worklog...")
-                let days = await TempoService.shared.getDaysSinceLastWorklog(
-                    apiToken: credentials.apiToken,
-                    jiraURL: credentials.jiraURL,
-                    accountId: credentials.accountId.isEmpty ? nil : credentials.accountId
-                )
-                print("Debug: AppDelegate - Days since last worklog: \(days?.description ?? "nil")")
-                
-                await MainActor.run {
-                    updateStatusBarDisplay(days: days, warningThreshold: credentials.warningThreshold)
-                }
-            } catch {
-                print("Debug: AppDelegate - Error in updateStatusBar: \(error)")
-                await MainActor.run {
-                    updateStatusBarDisplay(error: error)
-                }
-            }
-        }
-    }
-    
-    private func updateStatusBarDisplay(days: Int?, warningThreshold: Int) {
+    private func updateStatusBarDisplay() {
         guard let button = statusBarItem.button else { return }
         
-        print("Debug: AppDelegate - updateStatusBarDisplay called with days: \(days?.description ?? "nil"), warningThreshold: \(warningThreshold)")
-        
-        if let days = days {
-            let emoji: String
-            let color: NSColor
+        if let errorMessage = stateManager.errorMessage {
+            // Handle error state
+            button.title = "❌"
             
-            if days <= warningThreshold {
-                emoji = "✅"
-                color = .systemGreen
-            } else if days <= warningThreshold + 1 {
-                emoji = "⏰"
-                color = .systemOrange
-            } else {
-                emoji = "🚨"
-                color = .systemRed
-            }
-            
-            button.title = "\(emoji) \(days)"
-            button.attributedTitle = NSAttributedString(
-                string: "\(emoji) \(days)",
-                attributes: [.foregroundColor: color]
-            )
-            button.toolTip = "Last worklog: \(days) day\(days == 1 ? "" : "s") ago"
-            print("Debug: AppDelegate - Set status bar to: \(emoji) \(days)")
-        } else {
-            button.title = "⏱️"
-            button.toolTip = "No worklog data available"
-            print("Debug: AppDelegate - Set status bar to: ⏱️ (no data)")
-        }
-    }
-    
-    private func updateStatusBarDisplay(error: Error) {
-        guard let button = statusBarItem.button else { return }
-        
-        print("Debug: AppDelegate - updateStatusBarDisplay error: \(error)")
-        
-        button.title = "❌"
-        
-        if let credentialError = error as? CredentialError {
-            switch credentialError {
-            case .noStoredCredentials:
+            if !stateManager.hasCredentials {
                 button.toolTip = "No credentials configured. Click to open settings and configure your Tempo credentials."
-            case .decodingFailed:
-                button.toolTip = "Credential data corrupted. Click to open settings and re-enter your credentials."
-            }
-        } else if let tempoError = error as? TempoError {
-            switch tempoError {
-            case .unauthorized:
+            } else if errorMessage.contains("Unauthorized") {
                 button.toolTip = "API token invalid. Click to open settings and check your credentials."
-            case .forbidden:
+            } else if errorMessage.contains("Forbidden") {
                 button.toolTip = "Access forbidden. Check your account permissions."
-            case .notFound:
+            } else if errorMessage.contains("not found") {
                 button.toolTip = "Account not found. Click to open settings and check your Account ID."
-            case .networkError:
+            } else if errorMessage.contains("Network") {
                 button.toolTip = "Network error. Check your internet connection."
-            case .apiError(let statusCode):
-                button.toolTip = "API error (HTTP \(statusCode)). Check your Jira URL and credentials."
-            default:
-                button.toolTip = "Tempo error: \(tempoError.localizedDescription)"
+            } else {
+                button.toolTip = "Error: \(errorMessage)"
             }
         } else {
-            button.toolTip = "Error: \(error.localizedDescription)"
+            // Handle normal state
+            button.title = stateManager.statusBarTitle
+            
+            if let days = stateManager.daysSinceLastWorklog {
+                let color: NSColor
+                if days <= stateManager.warningThreshold {
+                    color = .systemGreen
+                } else if days <= stateManager.warningThreshold + 1 {
+                    color = .systemOrange
+                } else {
+                    color = .systemRed
+                }
+                
+                button.attributedTitle = NSAttributedString(
+                    string: stateManager.statusBarTitle,
+                    attributes: [.foregroundColor: color]
+                )
+            }
+            
+            button.toolTip = stateManager.statusBarTooltip
         }
-        
-        print("Debug: AppDelegate - Set status bar to: ❌ with tooltip: \(button.toolTip ?? "nil")")
     }
 }
 
