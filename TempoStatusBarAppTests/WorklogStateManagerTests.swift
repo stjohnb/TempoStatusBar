@@ -50,8 +50,7 @@ final class WorklogStateManagerTests: XCTestCase {
             apiToken: "test-token",
             accountId: "test-account",
             jiraURL: "https://test.atlassian.net",
-            warningThreshold: 5,
-            githubToken: nil
+            warningThreshold: 5
         )
         mockCredentialManager.mockCredentials = credentials
         mockCredentialManager.hasCredentialsResult = true
@@ -147,8 +146,7 @@ final class WorklogStateManagerTests: XCTestCase {
             apiToken: "test-token",
             accountId: "test-account",
             jiraURL: "https://test.atlassian.net",
-            warningThreshold: 5,
-            githubToken: nil
+            warningThreshold: 5
         )
         mockCredentialManager.mockCredentials = credentials
         mockCredentialManager.hasCredentialsResult = true
@@ -170,8 +168,7 @@ final class WorklogStateManagerTests: XCTestCase {
             apiToken: "test-token",
             accountId: "test-account",
             jiraURL: "https://test.atlassian.net",
-            warningThreshold: 7,
-            githubToken: nil
+            warningThreshold: 7
         )
         mockCredentialManager.mockCredentials = credentials
         stateManager.hasCredentials = true
@@ -218,8 +215,7 @@ final class WorklogStateManagerTests: XCTestCase {
             apiToken: "test-token",
             accountId: "test-account",
             jiraURL: "https://test.atlassian.net",
-            warningThreshold: 7,
-            githubToken: nil
+            warningThreshold: 7
         )
         mockCredentialManager.mockCredentials = credentials
         mockCredentialManager.loadCredentialsError = CredentialError.noStoredCredentials
@@ -240,8 +236,7 @@ final class WorklogStateManagerTests: XCTestCase {
             apiToken: "test-token",
             accountId: "test-account",
             jiraURL: "https://test.atlassian.net",
-            warningThreshold: 7,
-            githubToken: nil
+            warningThreshold: 7
         )
         mockCredentialManager.mockCredentials = credentials
         mockTempoService.mockError = TempoError.unauthorized
@@ -261,8 +256,7 @@ final class WorklogStateManagerTests: XCTestCase {
             apiToken: "test-token",
             accountId: "test-account",
             jiraURL: "https://test.atlassian.net",
-            warningThreshold: 7,
-            githubToken: nil
+            warningThreshold: 7
         )
         mockCredentialManager.mockCredentials = credentials
         mockTempoService.mockError = TempoError.networkError
@@ -302,8 +296,7 @@ final class WorklogStateManagerTests: XCTestCase {
             apiToken: "test-token",
             accountId: "test-account",
             jiraURL: "https://test.atlassian.net",
-            warningThreshold: 7,
-            githubToken: nil
+            warningThreshold: 7
         )
         mockCredentialManager.mockCredentials = credentials
         mockTempoService.mockError = TempoError.unauthorized
@@ -325,8 +318,7 @@ final class WorklogStateManagerTests: XCTestCase {
             apiToken: "test-token",
             accountId: "test-account",
             jiraURL: "https://test.atlassian.net",
-            warningThreshold: 7,
-            githubToken: nil
+            warningThreshold: 7
         )
         mockCredentialManager.mockCredentials = credentials
         mockTempoService.mockError = TempoError.networkError
@@ -478,8 +470,7 @@ final class WorklogStateManagerTests: XCTestCase {
             apiToken: "test-token",
             accountId: "test-account",
             jiraURL: "https://test.atlassian.net",
-            warningThreshold: 7,
-            githubToken: nil
+            warningThreshold: 7
         )
         mockCredentialManager.mockCredentials = credentials
         stateManager.hasCredentials = true
@@ -516,8 +507,7 @@ final class WorklogStateManagerTests: XCTestCase {
             apiToken: "test-token",
             accountId: "test-account",
             jiraURL: "https://test.atlassian.net",
-            warningThreshold: 7,
-            githubToken: nil
+            warningThreshold: 7
         )
         mockCredentialManager.mockCredentials = credentials
         mockCredentialManager.loadCredentialsError = CredentialError.noStoredCredentials
@@ -537,8 +527,7 @@ final class WorklogStateManagerTests: XCTestCase {
             apiToken: "test-token",
             accountId: "test-account",
             jiraURL: "https://test.atlassian.net",
-            warningThreshold: 7,
-            githubToken: nil
+            warningThreshold: 7
         )
         mockCredentialManager.mockCredentials = credentials
         mockTempoService.mockError = TempoError.unauthorized
@@ -557,8 +546,7 @@ final class WorklogStateManagerTests: XCTestCase {
             apiToken: "test-token",
             accountId: "test-account",
             jiraURL: "https://test.atlassian.net",
-            warningThreshold: 7,
-            githubToken: nil
+            warningThreshold: 7
         )
         mockCredentialManager.mockCredentials = credentials
         mockTempoService.mockError = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "Test error"])

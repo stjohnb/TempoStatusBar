@@ -31,7 +31,6 @@ struct SettingsView: View {
     @State private var accountId = ""
     @State private var jiraURL = ""
     @State private var warningThreshold = 7
-    @State private var githubToken = ""
     @State private var launchAtLogin: Bool = LaunchAtLoginManager.shared.isEnabled
     @State private var launchAtLoginError: String?
     @State private var isTestingConnection = false
@@ -105,16 +104,6 @@ struct SettingsView: View {
                 Text("The app will show a warning emoji when no worklog has been recorded for this many days or more.")
                     .font(.caption)
                     .foregroundColor(.secondary)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("GitHub Update Token (Optional)")
-                    .font(.headline)
-                MacOSTextField("Personal access token for update checks", text: $githubToken, isSecure: true)
-                Text("Required when the repository is private. Create a fine-grained PAT scoped to St-John-Software/TempoStatusBar with Contents: read at https://github.com/settings/personal-access-tokens")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.leading)
             }
 
             if isDetectingUser {
@@ -229,7 +218,6 @@ struct SettingsView: View {
             accountId = credentials.accountId
             jiraURL = credentials.jiraURL
             warningThreshold = credentials.warningThreshold
-            githubToken = credentials.githubToken ?? ""
         } catch {
             // No stored credentials or error loading them - this is normal for first-time users
             logger.info("No stored credentials found: \(error.localizedDescription)")
@@ -241,7 +229,6 @@ struct SettingsView: View {
         apiToken = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
         accountId = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
         jiraURL = jiraURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        githubToken = githubToken.trimmingCharacters(in: .whitespacesAndNewlines)
         return !apiToken.isEmpty && !jiraURL.isEmpty
     }
 
@@ -255,8 +242,7 @@ struct SettingsView: View {
                 apiToken: apiToken,
                 accountId: accountId,
                 jiraURL: jiraURL,
-                warningThreshold: warningThreshold,
-                githubToken: githubToken.isEmpty ? nil : githubToken
+                warningThreshold: warningThreshold
             )
             saveResult = "✅ Credentials saved successfully!"
             
@@ -275,7 +261,6 @@ struct SettingsView: View {
         accountId = ""
         jiraURL = ""
         warningThreshold = 7
-        githubToken = ""
         saveResult = "✅ Stored credentials cleared"
     }
     

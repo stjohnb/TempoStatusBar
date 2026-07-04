@@ -1,0 +1,27 @@
+name: PR Cleanup
+
+# Triggers removed for the public snapshot — this workflow is intentionally disabled.
+# See the private source repository for the active version.
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+
+concurrency:
+  group: pr-cleanup-${{ github.event.number }}
+  cancel-in-progress: false
+
+jobs:
+  delete-pr-release:
+    name: Delete PR Pre-release
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux]
+    steps:
+      - name: Delete pr-${{ github.event.number }} release and tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete "pr-${{ github.event.number }}" \
+            --yes --cleanup-tag \
+            --repo "${{ github.repository }}" 2>/dev/null || true
+          echo "Cleanup complete (release may not have existed; that is OK)."

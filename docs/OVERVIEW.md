@@ -201,14 +201,13 @@ The `lastErrorWasNetworkError` flag is set `true` only on `.networkError` and cl
 
 The automatic path passes `respectSkippedVersion: true` so the alert is suppressed if the user previously clicked "Skip This Version". The manual path always shows a result.
 
-`UpdateChecker.shared` performs the actual API call to `https://api.github.com/repos/St-John-Software/TempoStatusBar/releases/latest`. Requests include `User-Agent: TempoStatusBar/<version>` — the GitHub API rejects requests that omit this header. `parseSemver` strips leading `v`/`V`, splits on `.`, and pads shorter arrays with zeros for comparison — correctly handling `1.2.10 > 1.2.9` where string comparison would fail. "Skip This Version" persists the version string in `UserDefaults` under `TempoStatusBar.UpdateChecker.skippedVersion`. No Sparkle dependency — users click through to `release.html_url` to download.
+`UpdateChecker.shared` performs the actual API call to `https://api.github.com/repos/stjohnb/TempoStatusBar/releases/latest` — a **public** repo, distinct from the private `St-John-Software/TempoStatusBar` source repo this codebase lives in. Requests include `User-Agent: TempoStatusBar/<version>` — the GitHub API rejects requests that omit this header. `parseSemver` strips leading `v`/`V`, splits on `.`, and pads shorter arrays with zeros for comparison — correctly handling `1.2.10 > 1.2.9` where string comparison would fail. "Skip This Version" persists the version string in `UserDefaults` under `TempoStatusBar.UpdateChecker.skippedVersion`. No Sparkle dependency — users click through to `release.html_url` to download.
 
-**Testability:** `UpdateChecker` exposes three injectable properties for unit tests:
+**Testability:** `UpdateChecker` exposes two injectable properties for unit tests:
 - `session: URLSession` — replaced with an ephemeral session backed by `MockURLProtocol` to intercept network requests without hitting the real GitHub API
 - `currentVersionProvider: () -> String` — overridden to return a controlled version string
-- `githubTokenProvider: () -> String?` — overridden to control whether an auth header is sent
 
-**Private repository support:** when the repository is private, unauthenticated requests return 404. Users can configure an optional GitHub Personal Access Token (PAT) in the "GitHub Update Token" field in Settings. The token is stored in the Keychain alongside other credentials and sent as `Authorization: Bearer <token>` on update-check requests. A fine-grained PAT scoped to `St-John-Software/TempoStatusBar` with `Contents: read` is sufficient. When a token is configured, a `404` response is treated as `.failed` (wrong scope, revoked, or wrong account) rather than `.skipped`, so the user receives a visible error instead of silent skipping. Without a token, a `404` is still treated as `.skipped(reason: "no published releases")`. HTTP `401` is always treated as `.failed` regardless of token presence.
+**No authentication:** requests are unauthenticated — there is no GitHub token plumbing (removed in #161, which repointed the checker from the private source repo at the public mirror). A `404` is treated as `.skipped(reason: "no published releases")` rather than an error, since the public repo may not yet have any releases published. HTTP `401` and other non-200 statuses are treated as `.failed`.
 
 ## API Integration
 
@@ -233,7 +232,7 @@ The app is **not sandboxed** (`com.apple.security.app-sandbox` is absent from th
 
 A migration path exists for users upgrading from versions that stored credentials in `UserDefaults` (pre-Keychain). On first `loadCredentials()` call, if no Keychain item exists under the current service name, the manager checks for AES-GCM-encrypted credentials in `UserDefaults`, decrypts them, saves them to Keychain, and removes the `UserDefaults` keys. Users upgrading from builds that used the previous Keychain service name (`com.stjohnsoftware.TempoStatusBar`, pre-#95) must re-enter their credentials once; the old item is left in place and ignored to avoid triggering an ACL prompt across signing identities (see #94/#98).
 
-Fields stored: `apiToken`, `accountId` (username), `jiraURL`, `warningThreshold`, `githubToken` (optional; used for authenticated update checks against private repos).
+Fields stored: `apiToken`, `accountId` (username), `jiraURL`, `warningThreshold`. (A `githubToken` field existed prior to #161 for authenticated update checks against the private repo; it was removed once `UpdateChecker` was repointed at a public repo. Old Keychain blobs containing a `githubToken` key still decode cleanly since `Credentials` uses synthesized `Decodable`, which ignores unknown JSON keys.)
 
 Saving or deleting credentials posts `.credentialsChanged` to `NotificationCenter`.
 
@@ -265,9 +264,8 @@ All user-facing configuration is set via `SettingsView`:
 | Account ID | Jira username (optional; auto-detected via `/myself`) | — |
 | Warning Threshold | Days before warning state activates | 7 |
 | Launch at Login | Toggle in "App Settings" section; macOS 13+ only (disabled with explanatory note on macOS 12) | off |
-| GitHub Update Token | Optional PAT for authenticated update checks; required when the repo is private. Fine-grained PAT scoped to `St-John-Software/TempoStatusBar` with `Contents: read`. | — |
 
-No environment variables or build-time configuration. There are no hardcoded endpoints beyond the relative API paths.
+No environment variables or build-time configuration. There are no hardcoded endpoints beyond the relative API paths. Update checks are unauthenticated against a public GitHub repo — no GitHub token field exists in Settings (removed in #161).
 
 ## Automation
 
@@ -307,6 +305,6 @@ Tests live in `TempoStatusBarAppTests/`. The custom shell script `run_tests.sh` 
 
 | Test class | Coverage |
 |---|---|
-| `UpdateCheckerTests` | `parseSemver` (v-prefix, uppercase V, no prefix, unknown/empty/prerelease returns nil), `compare` (numeric ordering, padding, equal), `checkForUpdates` (unknown version skipped, HTTP 404/200/401/500, transport error, malformed JSON, token present/absent/empty, 404-with-token returns `.failed`) |
+| `UpdateCheckerTests` | `parseSemver` (v-prefix, uppercase V, no prefix, unknown/empty/prerelease returns nil), `compare` (numeric ordering, padding, equal), `checkForUpdates` (unknown version skipped, HTTP 404 returns `.skipped`, HTTP 200 newer/same tag, HTTP 401/non-200 returns `.failed`, transport error, malformed JSON) |
 
 `MockURLProtocol` is a `URLProtocol` subclass that intercepts all requests made through an ephemeral `URLSession`. Tests inject it by setting `UpdateChecker.shared.session` to a session whose `URLSessionConfiguration.ephemeral.protocolClasses` includes `MockURLProtocol`. The static `handler` closure returns the desired `(Data, URLResponse)` or throws to simulate transport errors. This keeps update-checker tests entirely offline.

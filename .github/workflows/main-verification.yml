@@ -1,0 +1,215 @@
+name: Main Verification
+
+# Triggers removed for the public snapshot — this workflow is intentionally disabled.
+# See the private source repository for the active version.
+on:
+  workflow_dispatch:
+permissions:
+  security-events: write
+  contents: read
+
+concurrency:
+  group: main-verification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  main-build:
+    name: Main Build
+    runs-on: macos-15
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: '26.x'
+
+    - name: Generate version timestamp
+      id: version
+      run: |
+        echo "version=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+    - name: Import signing certificate
+      env:
+        SIGNING_CERT_P12_BASE64: ${{ secrets.SIGNING_CERT_P12_BASE64 }}
+        SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      run: |
+        CERT_PATH="$RUNNER_TEMP/signing.p12"
+        KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+
+        echo "$SIGNING_CERT_P12_BASE64" | base64 --decode -o "$CERT_PATH"
+
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+        # Import the signing identity (cert + private key). Omit -t so pkcs12
+        # aggregate items (cert and key) are both imported.
+        security import "$CERT_PATH" -P "$SIGNING_CERT_PASSWORD" -A -f pkcs12 -k "$KEYCHAIN_PATH"
+
+        # Import the Apple "Developer ID Certification Authority" intermediate so
+        # codesign can build the full chain from the leaf Developer ID cert up to
+        # the (system-trusted) Apple Root CA. The .p12 holds only the leaf cert +
+        # key; without the intermediate, codesign on Xcode 26 fails with
+        # "unable to build chain to self-signed root" / errSecInternalComponent (#133).
+        INTERMEDIATE_CER="$RUNNER_TEMP/DeveloperIDG2CA.cer"
+        curl -fsSL -o "$INTERMEDIATE_CER" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+        # `|| true`: re-importing an already-present cert exits non-zero, which would
+        # abort this `bash -e` step; the cert being present is the desired state.
+        security import "$INTERMEDIATE_CER" -t cert -k "$KEYCHAIN_PATH" || true
+        rm -f "$INTERMEDIATE_CER"
+
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+
+        # Prepend temp keychain to search list so xcodebuild finds the identity
+        security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
+        rm "$CERT_PATH"
+
+        # Verify the identity is available for codesigning (no -v: self-signed certs
+        # aren't "trusted" by the system, but codesign can still use them for signing)
+        security find-identity -p codesigning "$KEYCHAIN_PATH"
+
+    - name: Build main version
+      env:
+        DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+      run: |
+        xcodebuild -project TempoStatusBarApp.xcodeproj \
+          -scheme TempoStatusBarApp \
+          -configuration Release \
+          -destination 'platform=macOS' \
+          DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+          build
+
+    - name: Run unit tests
+      run: |
+        echo "🧪 Running unit tests using local test script..."
+        chmod +x ./run_tests.sh
+        ./run_tests.sh
+        
+        echo "✅ Unit tests completed successfully"
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: test-results.xcresult
+        retention-days: 3
+
+    - name: Test summary
+      if: always()
+      run: |
+        echo "📊 Test Summary:"
+        echo "=================="
+        if [ -d "test-results.xcresult" ]; then
+          echo "✅ Test results generated successfully"
+          echo "📁 Test results saved as artifact: test-results"
+          echo "🔍 View test results in the Actions tab"
+        else
+          echo "⚠️  No test results found"
+        fi
+          
+    - name: Archive app
+      env:
+        DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+      run: |
+        xcodebuild -project TempoStatusBarApp.xcodeproj \
+          -scheme TempoStatusBarApp \
+          -configuration Release \
+          -destination 'platform=macOS' \
+          DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+          archive \
+          -archivePath ./build/TempoStatusBarApp.xcarchive
+
+    - name: Verify code signature
+      run: |
+        APP_PATH="./build/TempoStatusBarApp.xcarchive/Products/Applications/TempoStatusBarApp.app"
+
+        echo "=== codesign --display --verbose=4 ==="
+        codesign --display --verbose=4 "$APP_PATH"
+
+        echo "=== Designated requirement ==="
+        codesign --display --requirements - "$APP_PATH"
+
+        echo "=== codesign --verify --deep --strict ==="
+        codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+        echo "=== Identity must be a Developer ID Application cert ==="
+        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=Developer ID Application:' \
+          || { echo "❌ Expected Authority=Developer ID Application: not found"; exit 1; }
+
+        echo "=== Hardened Runtime must be enabled ==="
+        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'flags=.*runtime' \
+          || { echo "❌ Hardened Runtime flag not present in signature"; exit 1; }
+
+        echo "✅ Code signature verified (Developer ID + Hardened Runtime; notarization happens on release tags only)"
+
+    - name: Create DMG
+      run: |
+        set -euo pipefail
+        DMG_NAME="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
+
+        # Fresh staging directory each run.
+        rm -rf ./dmg
+        mkdir -p ./dmg
+        cp -R ./build/TempoStatusBarApp.xcarchive/Products/Applications/TempoStatusBarApp.app ./dmg/
+
+        hdiutil create -volname "TempoStatusBarApp" -srcfolder ./dmg -ov -format UDZO "$DMG_NAME"
+
+        echo "Created $DMG_NAME"
+
+    - name: Clean up signing keychain
+      if: always()
+      run: |
+        KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+        security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+
+  security-check:
+    name: Security Check
+    runs-on: [self-hosted, linux]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        cache: 'false'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+      continue-on-error: true
+
+  documentation-check:
+    name: Documentation Check
+    runs-on: [self-hosted, linux]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+        
+    - name: Check for documentation
+      run: |
+        if [ -f "README.md" ]; then
+          echo "✅ README.md found"
+        else
+          echo "⚠️  README.md not found"
+        fi
+        
+        if [ -f "CONTRIBUTING.md" ]; then
+          echo "✅ CONTRIBUTING.md found"
+        else
+          echo "⚠️  CONTRIBUTING.md not found"
+        fi 

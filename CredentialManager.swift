@@ -17,7 +17,6 @@ class CredentialManager: CredentialManagerProtocol {
         let accountId: String
         let jiraURL: String
         let warningThreshold: Int
-        let githubToken: String?
     }
 
     // MARK: - Keychain helpers
@@ -100,9 +99,8 @@ class CredentialManager: CredentialManagerProtocol {
 
     // MARK: - CredentialManagerProtocol
 
-    func saveCredentials(apiToken: String, accountId: String, jiraURL: String, warningThreshold: Int = 7, githubToken: String? = nil) throws {
-        let normalizedGithubToken = githubToken.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        let credentials = Credentials(apiToken: apiToken, accountId: accountId, jiraURL: jiraURL, warningThreshold: warningThreshold, githubToken: normalizedGithubToken)
+    func saveCredentials(apiToken: String, accountId: String, jiraURL: String, warningThreshold: Int = 7) throws {
+        let credentials = Credentials(apiToken: apiToken, accountId: accountId, jiraURL: jiraURL, warningThreshold: warningThreshold)
         let data = try JSONEncoder().encode(credentials)
         try saveToKeychain(data: data)
         removeLegacyCredentials()
