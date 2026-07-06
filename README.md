@@ -1,8 +1,6 @@
-This confirms the README matches exactly. It contains no private-access-only commands, so the rewrite just needs the opening note plus light polish per the constraints.
-
 # TempoStatusBarApp
 
-> This is a public, automatically-published snapshot of a personal, self-hosted project. It's shared to show how the project works, not as a turnkey product — some details may reference the author's own setup.
+> This is a public, read-only snapshot of a personal, self-hosted project. It's shared to show how the project works, not as a maintained, turnkey product — some details may reference the author's own infrastructure and setup.
 
 This is a macOS menu bar app that shows how many days have passed since your last Jira Tempo worklog submission.
 

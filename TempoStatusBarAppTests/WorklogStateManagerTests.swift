@@ -721,13 +721,27 @@ final class ConnectionTestTests: XCTestCase {
 // MARK: - CredentialManager.hasStoredCredentials() Tests
 
 final class CredentialManagerHasStoredCredentialsTests: XCTestCase {
-    override func setUp() {
-        super.setUp()
+    // This suite exercises the REAL keychain via CredentialManager.shared —
+    // including deleteCredentials() against the production service name in
+    // setUp/tearDown. On the shared self-hosted CI Macs the runner user's
+    // keychain holds genuine credentials and headless keychain access blocks
+    // on authorization dialogs, so CI sets TEMPO_SKIP_KEYCHAIN_TESTS=1 and the
+    // whole suite is skipped there. The skip must happen BEFORE setUp touches
+    // the keychain, hence setUpWithError.
+    override func setUpWithError() throws {
+        try XCTSkipIf(
+            ProcessInfo.processInfo.environment["TEMPO_SKIP_KEYCHAIN_TESTS"] == "1",
+            "Real-keychain tests are skipped on self-hosted CI runners"
+        )
         CredentialManager.shared.deleteCredentials()
     }
 
     override func tearDown() {
-        CredentialManager.shared.deleteCredentials()
+        // tearDown still runs when setUpWithError skips — keep it away from the
+        // real keychain under the same gate.
+        if ProcessInfo.processInfo.environment["TEMPO_SKIP_KEYCHAIN_TESTS"] != "1" {
+            CredentialManager.shared.deleteCredentials()
+        }
         super.tearDown()
     }
 

@@ -48,7 +48,8 @@ TempoStatusBarApp.xcodeproj  Xcode project
 ## Building & testing
 
 - Build: open `TempoStatusBarApp.xcodeproj` in Xcode 16+ and build (CI uses
-  Xcode 26.x), or
+  each self-hosted runner's newest installed Xcode via a job-scoped
+  `DEVELOPER_DIR` — see the `Select Xcode` step), or
   `xcodebuild -project TempoStatusBarApp.xcodeproj -scheme TempoStatusBarApp build`.
 - Tests: run `./run_tests.sh`. This is what CI uses — do not bypass it
   with plain `xcodebuild test`. The script must exit non-zero on failure.
@@ -57,17 +58,15 @@ TempoStatusBarApp.xcodeproj  Xcode project
 
 ## CI / workflows (`.github/workflows/`)
 
-- **macOS jobs (build / test / sign) run on GitHub-hosted runners**
-  (`macos-15`). Linux utility jobs (Trivy, docs, cleanup, notify) run on
+- **macOS jobs (build / test / sign) run on self-hosted runners**
+  (`[self-hosted, macos, tempo]`). Linux utility jobs (Trivy, docs, cleanup, notify) run on
   `[self-hosted, linux]`.
-- **GitHub-hosted macOS CI minutes are limited and billed — be frugal:**
-  - **Minimise the number of PRs.** Batch related changes into a single
-    PR rather than opening several; each PR runs a full macOS build+test.
-    Prefer consolidating open PRs over stacking new ones.
-  - Avoid trivial follow-up commits that re-trigger the macOS jobs —
-    squash/amend locally before pushing.
-  - CI skips for docs-only changes (see PR #112), so keep pure-docs work
-    out of code PRs where practical.
+- **Batch related changes into PRs** — each PR runs a full macOS build+test.
+  Prefer consolidating open PRs over stacking new ones. Avoid trivial
+  follow-up commits that re-trigger the macOS jobs — squash/amend locally
+  before pushing.
+- **CI skips for docs-only changes** (see PR #112), so keep pure-docs work
+  out of code PRs where practical.
 - Signing certs come from repo secrets (`SIGNING_CERT_P12_BASE64`,
   `SIGNING_CERT_PASSWORD`, `KEYCHAIN_PASSWORD`). Do not change the
   signing flow without coordinating.
