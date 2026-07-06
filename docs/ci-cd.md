@@ -28,7 +28,7 @@ Steps:
 3. **Import signing certificate** (see [Code Signing](#code-signing) below)
 4. Debug build (`xcodebuild … -configuration Debug`)
 5. Release build (`xcodebuild … -configuration Release`)
-6. Unit tests via `./run_tests.sh` — uploads `test-results.xcresult` as artifact (3-day retention)
+6. Unit tests via `./run_tests.sh`, with `TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS: "1"` set on the step (see [Key Design Decisions](#key-design-decisions)) — uploads `test-results.xcresult` as artifact (3-day retention)
 7. Archive (`xcodebuild … archive -archivePath ./build/TempoStatusBarApp.xcarchive`)
 8. Verify `.app` bundle structure
 9. **Verify code signature** — confirms `Authority=TempoStatusBar Signing` is present
@@ -43,7 +43,7 @@ Steps:
 
 Permissions: default (`contents: read`)
 
-Steps: Checkout + Xcode setup + `brew install swiftlint` + `swiftlint lint --reporter github-actions-logging`
+Steps: Checkout + Xcode setup + install SwiftLint (`command -v swiftlint || brew install swiftlint` — self-hosted runners keep it installed between runs, so this only installs on a cold runner; a bare `brew install` would otherwise try to upgrade an existing copy and fail where the Homebrew prefix isn't user-writable) + `swiftlint lint --reporter github-actions-logging`
 
 ### `security-scan`
 
@@ -73,7 +73,7 @@ The step uses `continue-on-error: true` so a comment failure doesn't fail the bu
 
 | Job | Runner | Description |
 |---|---|---|
-| `main-build` | `[self-hosted, macos, tempo]` | Import signing cert → Release build + unit tests + Archive + verify signature + DMG creation → clean up keychain |
+| `main-build` | `[self-hosted, macos, tempo]` | Import signing cert → Release build + unit tests (real-keychain suite skipped, see below) + Archive + verify signature + DMG creation → clean up keychain |
 | `security-check` | `[self-hosted, linux]` | Trivy filesystem scan (SARIF to Security tab) |
 | `documentation-check` | `[self-hosted, linux]` | Verifies required docs exist (`README.md`, `CONTRIBUTING.md`) |
 
@@ -220,3 +220,4 @@ The release and PR workflows additionally **notarize and staple** the DMG so Gat
 - **Signing verification in CI** — the "Verify code signature" step asserts both `Authority=Developer ID Application:` and the presence of the `runtime` flag in the signature. This catches accidental ad-hoc, self-signed, or unhardened builds before the DMG is packaged.
 - **`spctl --assess` over `stapler validate` alone** — the release workflow runs both. `stapler validate` confirms a ticket exists locally; `spctl --assess --type open --context context:primary-signature` is what Gatekeeper actually runs when a user opens the file from a quarantined download. Asserting both protects against the case where stapling appeared to succeed but the ticket doesn't satisfy Gatekeeper.
 - **Self-hosted runners — macOS and Linux** — build/test/quality jobs run on `[self-hosted, macos, tempo]`. The Linux-only utility jobs (Trivy scans, docs checks, PR cleanup, failure notification) run on `[self-hosted, linux]` and declare an explicit OS label so they are never scheduled onto a macOS runner.
+- **Real-keychain test skip on CI (`TEMPO_SKIP_KEYCHAIN_TESTS`)** — `CredentialManagerHasStoredCredentialsTests` (see [OVERVIEW.md](OVERVIEW.md#testing)) exercises the real Keychain via `CredentialManager.shared`, including deleting the item under the production service name in `setUp`/`tearDown`. On the shared self-hosted Macs, the runner user's login keychain holds genuine credentials, and headless keychain access blocks on an authorization dialog instead of failing fast (observed as multi-minute test hangs, and once an actual password prompt on the runner's screen). `pr-verification.yml` and `main-verification.yml` set `TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS: "1"` on the "Run unit tests" step; `xcodebuild` only forwards environment variables prefixed `TEST_RUNNER_` into the test-host process (stripping the prefix), so the test suite sees plain `TEMPO_SKIP_KEYCHAIN_TESTS=1`. The gate lives in `setUpWithError` (via `XCTSkipIf`) rather than `setUp`, because it must run before any keychain access is attempted. Locally, without the env var, the suite runs unskipped against the real Keychain as before.

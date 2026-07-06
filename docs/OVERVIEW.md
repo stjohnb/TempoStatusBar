@@ -298,7 +298,7 @@ Tests live in `TempoStatusBarAppTests/`. The custom shell script `run_tests.sh` 
 |---|---|
 | `WorklogStateManagerTests` | Initial state, credential loading, data fetching, error handling (including network retry), computed status properties, data clearing |
 | `ConnectionTestTests` | `runConnectionTest` — Account ID mismatch, case-insensitive match, key-field fallback, nil identity fields, fetch-user-info errors, empty accountId bypass |
-| `CredentialManagerHasStoredCredentialsTests` | `hasStoredCredentials()` before/after save and delete (hits the real Keychain) |
+| `CredentialManagerHasStoredCredentialsTests` | `hasStoredCredentials()` before/after save and delete (hits the real Keychain; whole suite is skipped when `TEMPO_SKIP_KEYCHAIN_TESTS=1`, as set on the shared self-hosted CI runners — see [ci-cd.md](ci-cd.md#key-design-decisions)) |
 | `WorklogDaysSinceStartedTests` | `Worklog.daysSinceStarted` — today (0), N days ago, malformed date, ISO8601 with timezone, future date |
 
 ### `UpdateCheckerTests.swift` — one test class + `MockURLProtocol`

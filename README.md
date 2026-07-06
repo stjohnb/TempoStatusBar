@@ -1,6 +1,6 @@
 # TempoStatusBarApp
 
-> This is a public, read-only snapshot of a personal, self-hosted project. It's shared to show how the project works, not as a maintained, turnkey product — some details may reference the author's own infrastructure and setup.
+> **Note:** This is a public, read-only snapshot of a personal, self-hosted project. It's shared to show how the app works, not as a maintained, turnkey product — some details may reference the author's own setup and infrastructure.
 
 This is a macOS menu bar app that shows how many days have passed since your last Jira Tempo worklog submission.
 
