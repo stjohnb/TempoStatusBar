@@ -27,9 +27,6 @@ final class UpdateChecker {
 
     var session: URLSession = .shared
     var currentVersionProvider: () -> String = { appVersion }
-    var githubTokenProvider: () -> String? = {
-        (try? CredentialManager.shared.loadCredentials())?.githubToken
-    }
 
     var skippedVersion: String? {
         get { UserDefaults.standard.string(forKey: Self.skippedVersionKey) }
@@ -45,14 +42,10 @@ final class UpdateChecker {
             return .skipped(reason: "current version '\(current)' is not a valid semver")
         }
 
-        let url = URL(string: "https://api.github.com/repos/St-John-Software/TempoStatusBar/releases/latest")!
+        let url = URL(string: "https://api.github.com/repos/stjohnb/TempoStatusBar/releases/latest")!
         var request = URLRequest(url: url)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("TempoStatusBar/\(current)", forHTTPHeaderField: "User-Agent")
-        let token = githubTokenProvider()
-        if let token = token, !token.isEmpty {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        }
 
         let data: Data
         let response: URLResponse
@@ -65,15 +58,8 @@ final class UpdateChecker {
 
         if let httpResponse = response as? HTTPURLResponse {
             if httpResponse.statusCode == 404 {
-                if let token = token, !token.isEmpty {
-                    // Token configured but still 404: token can't see the repo (wrong scope/account)
-                    return .failed(URLError(.userAuthenticationRequired))
-                }
+                // Public repo: 404 means no published releases yet
                 return .skipped(reason: "no published releases")
-            }
-            if httpResponse.statusCode == 401 {
-                logger.error("Update check HTTP 401")
-                return .failed(URLError(.userAuthenticationRequired))
             }
             guard httpResponse.statusCode == 200 else {
                 let err = URLError(.badServerResponse)

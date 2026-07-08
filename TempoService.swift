@@ -75,15 +75,31 @@ class WorklogStateManager: ObservableObject {
         } catch CredentialError.noStoredCredentials {
             hasCredentials = false
             clearData()
+        } catch let credentialError as CredentialError {
+            logger.error("Failed to load credentials: \(credentialError.localizedDescription, privacy: .public)")
+            hasCredentials = false
+            clearData()
+            lastError = mapCredentialError(credentialError)
         } catch {
             logger.error("Failed to load credentials: \(error.localizedDescription, privacy: .public)")
             hasCredentials = false
             clearData()
-            lastError = .credentialError(detail: error.localizedDescription)
+            lastError = .other(message: error.localizedDescription)
         }
     }
 
     // MARK: - Private Methods
+
+    private func mapCredentialError(_ error: CredentialError) -> WorklogStateError {
+        switch error {
+        case .noStoredCredentials:
+            return .noCredentials
+        case .decodingFailed(let underlyingError):
+            return .credentialError(detail: underlyingError.localizedDescription)
+        case .keychainError(let status):
+            return .keychainError(status: status)
+        }
+    }
 
     private func setupNetworkMonitor() {
         let monitor = NWPathMonitor()
@@ -156,14 +172,7 @@ class WorklogStateManager: ObservableObject {
             if let credentialError = error as? CredentialError {
                 lastErrorWasNetworkError = false
                 hasCredentials = false
-                switch credentialError {
-                case .noStoredCredentials:
-                    lastError = .noCredentials
-                case .decodingFailed(let error):
-                    lastError = .credentialError(detail: error.localizedDescription)
-                case .keychainError(let status):
-                    lastError = .keychainError(status: status)
-                }
+                lastError = mapCredentialError(credentialError)
             } else if let tempoError = error as? TempoError {
                 lastError = .tempo(tempoError)
                 if case .networkError = tempoError {

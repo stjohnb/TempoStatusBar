@@ -151,12 +151,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc func showAbout() {
-        let alert = NSAlert()
-        alert.messageText = "TempoStatusBar"
-        alert.informativeText = "Version \(appVersion)\n\nA macOS menu bar app for monitoring Jira Tempo worklogs."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        presentAlert(
+            messageText: "TempoStatusBar",
+            informativeText: "Version \(appVersion)\n\nA macOS menu bar app for monitoring Jira Tempo worklogs."
+        )
     }
 
     @objc func quitApp() {
@@ -181,14 +179,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let result = await UpdateChecker.shared.checkForUpdates()
         switch result {
         case .upToDate(let current):
-            if showUpToDateAlert { presentInfoAlert(messageText: "TempoStatusBar is up to date.", informativeText: "Version \(current)") }
+            if showUpToDateAlert { presentAlert(messageText: "TempoStatusBar is up to date.", informativeText: "Version \(current)") }
         case .updateAvailable(let current, let latest, let releaseURL):
             if respectSkippedVersion && UpdateChecker.shared.skippedVersion == latest { return }
             presentUpdateAvailableAlert(current: current, latest: latest, releaseURL: releaseURL)
         case .skipped(let reason):
-            if showUpToDateAlert { presentInfoAlert(messageText: "Could not check for updates.", informativeText: reason) }
+            if showUpToDateAlert { presentAlert(messageText: "Could not check for updates.", informativeText: reason) }
         case .failed(let error):
-            if showUpToDateAlert { presentWarningAlert(messageText: "Update check failed.", informativeText: error.localizedDescription) }
+            if showUpToDateAlert { presentAlert(messageText: "Update check failed.", informativeText: error.localizedDescription, alertStyle: .warning) }
         }
     }
 
@@ -211,20 +209,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func presentInfoAlert(messageText: String, informativeText: String) {
+    private func presentAlert(messageText: String, informativeText: String, alertStyle: NSAlert.Style = .informational) {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = messageText
-        alert.informativeText = informativeText
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
-
-    private func presentWarningAlert(messageText: String, informativeText: String) {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.alertStyle = .warning
+        alert.alertStyle = alertStyle
         alert.messageText = messageText
         alert.informativeText = informativeText
         alert.addButton(withTitle: "OK")

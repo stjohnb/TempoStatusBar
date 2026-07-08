@@ -2,12 +2,12 @@
 
 ## Workflow Files
 
-All workflows live in `.github/workflows/`. Five workflows cover the full development lifecycle.
+All workflows live in `.github/workflows/`. Six workflows cover the full development lifecycle.
 
 ### Common Settings (all workflows)
 
-- **Runners:** `macos-latest` for build/test/quality jobs; `self-hosted` for security scans and documentation checks
-- **Xcode:** `xcode-version: '26.x'` via `maxim-lobanov/setup-xcode@v1` (semver range, picks up patch updates automatically within Xcode 26)
+- **Runners:** Self-hosted `[self-hosted, macos, tempo]` for build/test/quality jobs; `[self-hosted, linux]` for security scans, documentation checks, PR cleanup, and failure notification. The `tempo` label pins these jobs to the Mac that does **not** run the real TempoStatusBarApp: signing jobs put a temp keychain into the runner user's keychain search list, and on a Mac where the real app is polling, that triggers keychain-unlock dialogs in the user's session. Machine-level documentation for the two shared Macs — inventory, runner-label semantics, registration and Xcode-install runbooks — is centralised in the claws repo: [docs/macos-runners.md](https://github.com/St-John-Software/claws/blob/main/docs/macos-runners.md).
+- **Xcode:** every macOS job starts with a shared `Select Xcode` step that finds the newest non-beta Xcode under `/Applications` and exports a **job-scoped `DEVELOPER_DIR`**. It deliberately does *not* use `maxim-lobanov/setup-xcode` or `xcode-select`: those change the machine-global active Xcode via `sudo`, and the two Macs are shared with namey and bonkus CI (which use the same step). No job may mutate machine-global state.
 - **Concurrency:** PR and main workflows use `cancel-in-progress: true` to cancel redundant runs; the release workflow uses `cancel-in-progress: false` to avoid interrupting in-flight release builds
 
 ---
@@ -28,7 +28,7 @@ Steps:
 3. **Import signing certificate** (see [Code Signing](#code-signing) below)
 4. Debug build (`xcodebuild … -configuration Debug`)
 5. Release build (`xcodebuild … -configuration Release`)
-6. Unit tests via `./run_tests.sh` — uploads `test-results.xcresult` as artifact (7-day retention)
+6. Unit tests via `./run_tests.sh`, with `TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS: "1"` set on the step (see [Key Design Decisions](#key-design-decisions)) — uploads `test-results.xcresult` as artifact (3-day retention)
 7. Archive (`xcodebuild … archive -archivePath ./build/TempoStatusBarApp.xcarchive`)
 8. Verify `.app` bundle structure
 9. **Verify code signature** — confirms `Authority=TempoStatusBar Signing` is present
@@ -43,11 +43,13 @@ Steps:
 
 Permissions: default (`contents: read`)
 
-Steps: Checkout + Xcode setup + `brew install swiftlint` + `swiftlint lint --reporter github-actions-logging`
+Steps: Checkout + Xcode setup + install SwiftLint (`command -v swiftlint || brew install swiftlint` — self-hosted runners keep it installed between runs, so this only installs on a cold runner; a bare `brew install` would otherwise try to upgrade an existing copy and fail where the Homebrew prefix isn't user-writable) + `swiftlint lint --reporter github-actions-logging`
 
 ### `security-scan`
 
-Runs on `self-hosted`. Steps: Checkout + `aquasecurity/trivy-action@master` (filesystem scan, SARIF output) + upload to GitHub Security tab.
+Runs on `[self-hosted, linux]`. Steps: Checkout + `aquasecurity/trivy-action@master` (filesystem scan, SARIF output, `cache: 'false'`) + upload to GitHub Security tab.
+
+**Doc-only skip:** The workflow trigger uses `paths-ignore: ['docs/**', '**/*.md']`, so PRs that change only documentation files do not trigger the workflow at all — the build, lint, and scan jobs simply do not run. Branch protection on `main` must require the workflow name ("PR Verification") rather than individual job names; if individual job names are listed as required checks, doc-only PRs will be blocked in "Expected" state because those checks never report.
 
 ---
 
@@ -71,9 +73,9 @@ The step uses `continue-on-error: true` so a comment failure doesn't fail the bu
 
 | Job | Runner | Description |
 |---|---|---|
-| `main-build` | macOS | Import signing cert → Debug + Release + Archive + verify signature + DMG creation → clean up keychain |
-| `security-check` | self-hosted | Trivy filesystem scan (SARIF to Security tab) |
-| `documentation-check` | self-hosted | Verifies required docs exist (`README.md`, `CONTRIBUTING.md`) |
+| `main-build` | `[self-hosted, macos, tempo]` | Import signing cert → Release build + unit tests (real-keychain suite skipped, see below) + Archive + verify signature + DMG creation → clean up keychain |
+| `security-check` | `[self-hosted, linux]` | Trivy filesystem scan (SARIF to Security tab) |
+| `documentation-check` | `[self-hosted, linux]` | Verifies required docs exist (`README.md`, `CONTRIBUTING.md`) |
 
 ---
 
@@ -85,9 +87,9 @@ The step uses `continue-on-error: true` so a comment failure doesn't fail the bu
 
 | Job | Runner | Description |
 |---|---|---|
-| `release-build` | macOS | Import signing cert → Release build + Archive + verify signature + DMG (named `TempoStatusBarApp-<version>.dmg`) → attach raw DMG to the GitHub Release page → clean up keychain |
-| `security-check` | self-hosted | Trivy scan |
-| `documentation-check` | self-hosted | Docs presence check |
+| `release-build` | `[self-hosted, macos, tempo]` | Import signing cert → Release build + Archive (both with `MARKETING_VERSION=<tag>` override) + verify signature + DMG (named `TempoStatusBarApp-<version>.dmg`) → attach raw DMG to the GitHub Release page → clean up keychain |
+| `security-check` | `[self-hosted, linux]` | Trivy scan |
+| `documentation-check` | `[self-hosted, linux]` | Docs presence check |
 
 The `release-build` job uploads the DMG to the GitHub Release via `softprops/action-gh-release`, pinned to a full commit SHA (`3bb12739c298aeb8a4eeaf626c5b8d85266b0e65`, tag `v2.6.2`). SHA pinning is required here — this action writes to the public release page, so mutable refs (e.g. `@v2`, `@master`) are not acceptable. The upload step is gated with `if: github.event_name == 'release' && github.event.action == 'created'` so that manual `workflow_dispatch` runs (used for build testing) skip the upload and do not fail due to the absence of an associated release.
 
@@ -101,7 +103,7 @@ The first step of `release-build` asserts that `github.event.release.tag_name` e
 
 **Trigger:** `pull_request` with `types: [closed]` (fires on both merge and unmerged close)
 
-Runs on `self-hosted`. Single step: `gh release delete pr-<N> --yes --cleanup-tag` (with `|| true` so a missing release is non-fatal). Skipped for fork PRs.
+Runs on `[self-hosted, linux]`. Single step: `gh release delete pr-<N> --yes --cleanup-tag` (with `|| true` so a missing release is non-fatal). Skipped for fork PRs.
 
 This workflow exists so per-PR pre-releases do not accumulate on the Releases page indefinitely.
 
@@ -109,7 +111,7 @@ This workflow exists so per-PR pre-releases do not accumulate on the Releases pa
 
 ## `notify-failures.yml` — Main Branch Failure Notification
 
-**Trigger:** `workflow_run` on the `"Main Verification"` workflow, type `completed`
+**Trigger:** `workflow_run` on the `"Main Verification"` and `"Actions Storage Cleanup"` workflows, type `completed`
 
 **Permissions:** `contents: read`, `issues: write`, `actions: read`
 
@@ -117,7 +119,7 @@ This workflow exists so per-PR pre-releases do not accumulate on the Releases pa
 
 **Job: `notify`**
 
-Runs on `self-hosted`. The job only executes when:
+Runs on `[self-hosted, linux]`. The job only executes when:
 - `github.event.workflow_run.conclusion == 'failure'`
 - `github.event.workflow_run.head_branch == 'main'`
 
@@ -125,13 +127,32 @@ Runs on `self-hosted`. The job only executes when:
 
 1. **Deduplication check** — uses `gh issue list` + `jq` to count open issues with the title `"Build failure: <workflow name>"`. If one already exists, no new issue is created (prevents flood of duplicate issues for repeated failures before anyone fixes the build).
 2. **Dynamic label** — checks whether a `bug` label exists in the repo (`gh label list | grep -qx "bug"`). Only passes `--label bug` to `gh issue create` if the label is present; omits the flag otherwise to avoid a hard failure on repos without that label.
-3. **Issue creation** — creates an issue titled `"Build failure: Main Verification"` with a body linking to the failed workflow run URL.
+3. **Issue creation** — creates an issue titled `"Build failure: <workflow name>"` (e.g. `"Build failure: Main Verification"` or `"Build failure: Actions Storage Cleanup"`) with a body linking to the failed workflow run URL. The title is built from `github.event.workflow_run.name`, so each monitored workflow deduplicates independently.
 
 **Key design points:**
 - The `workflow_run` trigger (rather than a step inside `main-verification.yml`) keeps failure notification fully decoupled from the build workflow. The build workflow does not need to be modified when notification behavior changes.
 - The branch guard (`head_branch == 'main'`) prevents the job from firing on feature-branch runs of the same workflow.
 - `notify-failures.yml` does **not** include itself in the `workflows:` list — self-referential inclusion would cause the workflow to trigger on its own runs.
 - `cancel-in-progress: false` on the concurrency group ensures back-to-back main failures each get their own issue-creation attempt (though deduplication prevents actual duplicate issues).
+
+---
+
+## `actions-storage-cleanup.yml` — Actions Storage Cleanup
+
+**Trigger:** `push` to `main` (primary — runs on every merge), `schedule` (`cron: '0 5 * * *'` — daily 05:00 UTC backstop), `workflow_dispatch`. The push trigger was added in #152 because the schedule-only configuration never fired a single run after the workflow was introduced — GitHub's cron scheduler has registration latency and drops scheduled runs under load, so cleanup now hooks the reliable push-to-main event.
+
+**Permissions:** `actions: write`, `contents: read`
+
+**Concurrency:** group `actions-storage-cleanup`, `cancel-in-progress: true` (the purge is idempotent — cancelling an in-flight run in favour of the newest is safe)
+
+**Job: `purge-caches`**
+
+Runs on `[self-hosted, linux]`. Two steps:
+
+1. **Purge all caches** — `gh cache delete --all --repo ${{ github.repository }} || true`. The `|| true` guard prevents the job from failing when there are no caches to delete (the `gh` CLI exits non-zero on an empty list).
+2. **Delete artifacts older than 3 days** — uses `gh api --paginate` to list all non-expired artifacts, filters for those whose `created_at` is more than 3 days old, and deletes each via `gh api -X DELETE`. Both PR and main `test-results` now use 3-day retention, so a 3-day cutoff deletes no live debugging artifact early. This step exists because legacy DMG artifacts uploaded before DMG distribution moved to per-PR pre-releases carried the 90-day default GitHub retention and accumulated against the org-shared quota (#146).
+
+This workflow protects the org-shared 2 GB Actions storage quota. These workflows do not rely on GHA caching (Trivy DB and binary persist on the self-hosted Linux disk between runs), so purging all caches daily is safe. If a future workflow ever legitimately introduces cross-run caching, this scheduled job must be revisited — a comment in the workflow file notes this explicitly.
 
 ---
 
@@ -158,11 +179,12 @@ The release and PR workflows additionally **notarize and staple** the DMG so Gat
 1. Decode `SIGNING_CERT_P12_BASE64` to a `.p12` file in `$RUNNER_TEMP`
 2. Create a temporary keychain (`$RUNNER_TEMP/build.keychain-db`) and unlock it
 3. Import the `.p12` into the temporary keychain
-4. Prepend the temp keychain to the user's keychain search list so Xcode finds the identity automatically during build
-5. Delete the `.p12` file from disk immediately after import
-6. Build — Xcode signs the `.app` bundle using the Developer ID identity (with Hardened Runtime)
-7. Verify: `codesign --verify --deep --strict`, assert `Authority=Developer ID Application:` is present, and assert the `runtime` flag appears in the signature flags
-8. Post-run: delete the temporary keychain (`security delete-keychain`)
+4. Download and import the Apple **Developer ID Certification Authority** intermediate (`DeveloperIDG2CA.cer`) into the temp keychain so `codesign` can build the full chain to the system-trusted Apple Root CA (without it, `codesign` fails with `errSecInternalComponent` on Xcode 26 — #133)
+5. Prepend the temp keychain to the user's keychain search list so Xcode finds the identity automatically during build
+6. Delete the `.p12` file from disk immediately after import
+7. Build — Xcode signs the `.app` bundle using the Developer ID identity (with Hardened Runtime)
+8. Verify: `codesign --verify --deep --strict`, assert `Authority=Developer ID Application:` is present, and assert the `runtime` flag appears in the signature flags
+9. Post-run: delete the temporary keychain (`security delete-keychain`)
 
 **Notarization (release and PR workflows):**
 
@@ -179,18 +201,23 @@ The release and PR workflows additionally **notarize and staple** the DMG so Gat
 
 ## Key Design Decisions
 
-- **`xcode-version: '26.x'`** — uses semver range to pick up patch updates automatically within Xcode 26. Tracks the current year-based Xcode release (Apple adopted year-based naming starting with Xcode 26 in 2026).
+- **`Select Xcode` via job-scoped `DEVELOPER_DIR`** — resolves the newest non-beta Xcode installed on whichever self-hosted runner picks up the job. The two self-hosted Macs do not necessarily have the same Xcode installed, so pinning a single version (e.g. `'26.x'`) would fail on any runner lacking it. Exporting `DEVELOPER_DIR` per job (instead of `sudo xcode-select` / `setup-xcode`) means the choice never leaks outside the job — required because the same two Macs also serve namey and bonkus iOS CI.
+- **Shared-runner contract** — the two self-hosted Macs are shared by TempoStatusBar, namey, and bonkus CI. Every macOS job in all three repos follows the same rules: no `sudo`; never mutate machine-global state (`xcode-select`, system keychain search order, Homebrew upgrades); guard tool installs with `command -v <tool> || <user-scoped install>`; keep signing material in per-job temp keychains that are deleted in an `always()` cleanup step; and set `timeout-minutes` on every macOS job so a wedged job can't starve the two-runner pool.
+  - **Caveat — signing jobs mutate the user keychain state.** The signing step is the one sanctioned exception to "never mutate machine-global state": it replaces the user's keychain search list with only the temp keychain (`security list-keychains -d user -s "$KEYCHAIN_PATH"`) and sets it as the user default (`security default-keychain -d user`), because the runner user has no GUI login session and `codesign` otherwise fails with `errSecInternalComponent` when the signing keychain is only in the search list. Both mutations are reverted in the `always()` "Clean up signing keychain" step (restore the search list and default to `login.keychain-db` alone, delete the temp keychain). **Residual risk:** because the search list is fully replaced rather than prepended, any other keychain that happened to be in the user's search list before the job ran (potentially added by a concurrent namey/bonkus job on these same two shared Macs) is dropped for the job's duration, and if that cleanup never runs (runner disconnects mid-job, process killed out-of-band, post-steps skipped), the shared Mac's user search list and default keychain are left pointing at an orphaned temp keychain, which can break `security`/`codesign` in the next job from *any* of the three repos. A signing job on this repo self-heals on its next run (it re-sets the search list and default), but non-signing jobs and other repos do not — if that state is observed, reset it manually with `security list-keychains -d user -s login.keychain-db` and `security default-keychain -d user -s login.keychain-db`. A future hardening is a defensive reset as the first step of every macOS job; changing the signing flow that way needs coordination across all three repos first (see "Do not change the signing flow without coordinating").
 - **PR DMG distribution via per-PR pre-release** — DMGs for PR builds are published via `softprops/action-gh-release` to a pre-release tagged `pr-<N>`, NOT via `actions/upload-artifact`. The artifact action always wraps its payload in a `.zip`; macOS treats a DMG extracted from a downloaded zip as a different quarantine origin than a DMG downloaded raw from the Releases page, causing Keychain re-prompts even with identical signing identities. Publishing via the same action used for tagged releases keeps the quarantine origin consistent. Per-PR pre-releases are cleaned up automatically by `pr-cleanup.yml` when the PR closes.
 - **`contents: write` on `build-and-test`** — The PR-build-publishing step uses `softprops/action-gh-release` to create/update a per-PR pre-release, which writes to the repo's Releases. The job declares its own `permissions` block, which replaces the workflow-level permissions for that job — so `contents: write` must be listed explicitly on the job, not just at the workflow level. The workflow-level `contents` permission stays at `read`.
 - **`cancel-in-progress`** — `true` for PR and main workflows to prevent stale runs from blocking the queue; `false` for the release workflow so in-flight release builds are not interrupted.
 - **DMG naming** — PR builds: `TempoStatusBarApp-pr-<N>-<sha>`; release builds: `TempoStatusBarApp-<version>`.
-- **Artifact retention** — `test-results` (xcresult) artifacts: 7 days for PRs, 30 days for main. PR build DMGs live as assets on a per-PR pre-release and are deleted when the PR closes (`pr-cleanup.yml`). Tagged-release DMGs live on the GitHub Release page and do not expire.
+- **Artifact retention** — `test-results` (xcresult) artifacts: 3 days for both PRs and main. PR build DMGs live as assets on a per-PR pre-release and are deleted when the PR closes (`pr-cleanup.yml`). Tagged-release DMGs live on the GitHub Release page and do not expire.
 - **Fork PRs** — both the pre-release publish step and the PR comment step are skipped for forks (read-only `GITHUB_TOKEN`). Fork contributors who need to test their build should either rebase onto the upstream repo or build locally with Xcode.
 - **SwiftLint** — installed at CI runtime via `brew`; configuration in `.swiftlint.yml`.
-- **Trivy action** — pinned to `@master` (mutable ref); consider pinning to a fixed tag in a future cleanup.
+- **Trivy action** — pinned to `@master` (mutable ref); consider pinning to a fixed tag in a future cleanup. GHA caching is explicitly disabled (`cache: 'false'`) on all three Trivy steps — the self-hosted Linux runners already persist the Trivy DB and binary on local disk between runs, so GHA cache is redundant and would otherwise accumulate ~112 MB of org-shared Actions storage quota (Trivy DB + binary cached per run). Any caches that do accumulate are purged daily by `actions-storage-cleanup.yml`.
 - **SHA pinning for release-publishing actions** — `softprops/action-gh-release` is pinned to a full commit SHA rather than a tag or moving ref. Actions that write to the public release page carry higher supply-chain risk if compromised; use full SHA pins for them. When updating the pin, verify the SHA with `gh api repos/softprops/action-gh-release/git/refs/tags/<version>` before committing.
 - **PR comment body construction** — the `github-script` step in `pr-verification.yml` builds the PR comment using an array joined with `\n` rather than a template literal. Template literals with unindented multi-line content break YAML block scalars; the array approach keeps every JavaScript line at consistent indentation within the `script: |` block and avoids YAML parse errors. The download URL is constructed deterministically from the PR number and version string — no `listWorkflowRunArtifacts` API call is needed.
-- **Developer ID signing with Hardened Runtime** — Release builds are signed with an Apple-issued Developer ID Application certificate and built with `ENABLE_HARDENED_RUNTIME = YES`. The cert is imported into a temporary keychain that is deleted at the end of each run — it is never written to the runner's permanent login keychain. Debug builds use ad-hoc signing (`CODE_SIGN_IDENTITY = "-"`) so local development doesn't depend on the production cert.
+- **`MARKETING_VERSION` CLI override** — Release and PR `xcodebuild` invocations pass `MARKETING_VERSION=<tag-version>` on the command line. This overrides the value hardcoded in `project.pbxproj` and ensures `appVersion`, `CFBundleShortVersionString`, and the About alert all report the release tag (e.g. `1.3.0`), not the stale project-file value (#105).
+- **Developer ID signing with Hardened Runtime** — Release builds are signed with an Apple-issued Developer ID Application certificate and built with `ENABLE_HARDENED_RUNTIME = YES`. The cert is imported into a temporary keychain that is deleted at the end of each run — it is never written to the runner's permanent login keychain. Debug builds use ad-hoc signing (`CODE_SIGN_IDENTITY = "-"`) so local development doesn't depend on the production cert. The Apple **Developer ID Certification Authority** intermediate is also imported into the temp keychain so `codesign` can build the full chain; without it Xcode 26 runners fail with `errSecInternalComponent` (#133).
 - **Notarization on PR and release builds** — both `pr-verification.yml` and `release-tag.yml` sign, notarize, and staple the DMG so users (including maintainers grabbing a PR build) don't hit Gatekeeper's first-launch warning. Main builds still skip notarization because their DMGs are not distributed. Notarization adds ~30s–2min per build. The PR notarization steps are gated on `github.event.pull_request.head.repo.full_name == github.repository` so that fork PRs (no secrets) skip them gracefully — those PRs still produce a signed DMG, just not a notarized one, and the publish + comment steps are already skipped for forks.
 - **Signing verification in CI** — the "Verify code signature" step asserts both `Authority=Developer ID Application:` and the presence of the `runtime` flag in the signature. This catches accidental ad-hoc, self-signed, or unhardened builds before the DMG is packaged.
 - **`spctl --assess` over `stapler validate` alone** — the release workflow runs both. `stapler validate` confirms a ticket exists locally; `spctl --assess --type open --context context:primary-signature` is what Gatekeeper actually runs when a user opens the file from a quarantined download. Asserting both protects against the case where stapling appeared to succeed but the ticket doesn't satisfy Gatekeeper.
+- **Self-hosted runners — macOS and Linux** — build/test/quality jobs run on `[self-hosted, macos, tempo]`. The Linux-only utility jobs (Trivy scans, docs checks, PR cleanup, failure notification) run on `[self-hosted, linux]` and declare an explicit OS label so they are never scheduled onto a macOS runner.
+- **Real-keychain test skip on CI (`TEMPO_SKIP_KEYCHAIN_TESTS`)** — `CredentialManagerHasStoredCredentialsTests` (see [OVERVIEW.md](OVERVIEW.md#testing)) exercises the real Keychain via `CredentialManager.shared`, including deleting the item under the production service name in `setUp`/`tearDown`. On the shared self-hosted Macs, the runner user's login keychain holds genuine credentials, and headless keychain access blocks on an authorization dialog instead of failing fast (observed as multi-minute test hangs, and once an actual password prompt on the runner's screen). `pr-verification.yml` and `main-verification.yml` set `TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS: "1"` on the "Run unit tests" step; `xcodebuild` only forwards environment variables prefixed `TEST_RUNNER_` into the test-host process (stripping the prefix), so the test suite sees plain `TEMPO_SKIP_KEYCHAIN_TESTS=1`. The gate lives in `setUpWithError` (via `XCTSkipIf`) rather than `setUp`, because it must run before any keychain access is attempted. Locally, without the env var, the suite runs unskipped against the real Keychain as before.

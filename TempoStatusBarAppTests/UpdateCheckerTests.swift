@@ -79,14 +79,12 @@ final class UpdateCheckerTests: XCTestCase {
     func testCheckForUpdates_404_returnsSkipped() async {
         let checker = UpdateChecker.shared
         checker.currentVersionProvider = { "1.0.0" }
-        checker.githubTokenProvider = { nil }
         checker.session = makeSession { _ in
             let response = HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: 404, httpVersion: nil, headerFields: nil)!
             return (Data(), response)
         }
         defer {
             checker.currentVersionProvider = { appVersion }
-            checker.githubTokenProvider = { (try? CredentialManager.shared.loadCredentials())?.githubToken }
             checker.session = .shared
         }
 
@@ -200,115 +198,6 @@ final class UpdateCheckerTests: XCTestCase {
         }
     }
 
-    // MARK: - GitHub token tests
-
-    func testCheckForUpdates_withToken_sendsAuthorizationHeader() async {
-        let checker = UpdateChecker.shared
-        checker.currentVersionProvider = { "1.0.0" }
-        checker.githubTokenProvider = { "ghp_test" }
-        var capturedRequest: URLRequest?
-        let json = #"{"tag_name":"v1.0.0","html_url":"https://github.com/releases/tag/v1.0.0"}"#
-        checker.session = makeSession { request in
-            capturedRequest = request
-            let response = HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            return (json.data(using: .utf8)!, response)
-        }
-        defer {
-            checker.currentVersionProvider = { appVersion }
-            checker.githubTokenProvider = { (try? CredentialManager.shared.loadCredentials())?.githubToken }
-            checker.session = .shared
-        }
-
-        _ = await checker.checkForUpdates()
-        XCTAssertEqual(capturedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer ghp_test")
-    }
-
-    func testCheckForUpdates_withoutToken_omitsAuthorizationHeader() async {
-        let checker = UpdateChecker.shared
-        checker.currentVersionProvider = { "1.0.0" }
-        checker.githubTokenProvider = { nil }
-        var capturedRequest: URLRequest?
-        let json = #"{"tag_name":"v1.0.0","html_url":"https://github.com/releases/tag/v1.0.0"}"#
-        checker.session = makeSession { request in
-            capturedRequest = request
-            let response = HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            return (json.data(using: .utf8)!, response)
-        }
-        defer {
-            checker.currentVersionProvider = { appVersion }
-            checker.githubTokenProvider = { (try? CredentialManager.shared.loadCredentials())?.githubToken }
-            checker.session = .shared
-        }
-
-        _ = await checker.checkForUpdates()
-        XCTAssertNil(capturedRequest?.value(forHTTPHeaderField: "Authorization"))
-    }
-
-    func testCheckForUpdates_emptyToken_omitsAuthorizationHeader() async {
-        let checker = UpdateChecker.shared
-        checker.currentVersionProvider = { "1.0.0" }
-        checker.githubTokenProvider = { "" }
-        var capturedRequest: URLRequest?
-        let json = #"{"tag_name":"v1.0.0","html_url":"https://github.com/releases/tag/v1.0.0"}"#
-        checker.session = makeSession { request in
-            capturedRequest = request
-            let response = HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            return (json.data(using: .utf8)!, response)
-        }
-        defer {
-            checker.currentVersionProvider = { appVersion }
-            checker.githubTokenProvider = { (try? CredentialManager.shared.loadCredentials())?.githubToken }
-            checker.session = .shared
-        }
-
-        _ = await checker.checkForUpdates()
-        XCTAssertNil(capturedRequest?.value(forHTTPHeaderField: "Authorization"))
-    }
-
-    func testCheckForUpdates_404_withToken_returnsFailed() async {
-        let checker = UpdateChecker.shared
-        checker.currentVersionProvider = { "1.0.0" }
-        checker.githubTokenProvider = { "ghp_test" }
-        checker.session = makeSession { _ in
-            let response = HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: 404, httpVersion: nil, headerFields: nil)!
-            return (Data(), response)
-        }
-        defer {
-            checker.currentVersionProvider = { appVersion }
-            checker.githubTokenProvider = { (try? CredentialManager.shared.loadCredentials())?.githubToken }
-            checker.session = .shared
-        }
-
-        let result = await checker.checkForUpdates()
-        if case .failed = result {
-            // expected
-        } else {
-            XCTFail("Expected .failed when token configured and 404 received, got \(result)")
-        }
-    }
-
-    func testCheckForUpdates_404_withoutToken_returnsSkipped() async {
-        let checker = UpdateChecker.shared
-        checker.currentVersionProvider = { "1.0.0" }
-        checker.githubTokenProvider = { nil }
-        checker.session = makeSession { _ in
-            let response = HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: 404, httpVersion: nil, headerFields: nil)!
-            return (Data(), response)
-        }
-        defer {
-            checker.currentVersionProvider = { appVersion }
-            checker.githubTokenProvider = { (try? CredentialManager.shared.loadCredentials())?.githubToken }
-            checker.session = .shared
-        }
-
-        let result = await checker.checkForUpdates()
-        if case .skipped = result {
-            // expected
-        } else {
-            XCTFail("Expected .skipped without token on 404, got \(result)")
-        }
-    }
-
     func testCheckForUpdates_401_returnsFailed() async {
         let checker = UpdateChecker.shared
         checker.currentVersionProvider = { "1.0.0" }
@@ -318,7 +207,6 @@ final class UpdateCheckerTests: XCTestCase {
         }
         defer {
             checker.currentVersionProvider = { appVersion }
-            checker.githubTokenProvider = { (try? CredentialManager.shared.loadCredentials())?.githubToken }
             checker.session = .shared
         }
 

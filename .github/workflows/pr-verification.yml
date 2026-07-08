@@ -15,7 +15,9 @@ concurrency:
 jobs:
   build-and-test:
     name: Build and Test
-    runs-on: macos-latest
+    runs-on: [self-hosted, macos, tempo]
+    # Only two Macs serve three repos — a wedged job must not hold one for hours.
+    timeout-minutes: 60
     permissions:
       contents: write
       pull-requests: write
@@ -26,10 +28,30 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Setup Xcode
-      uses: maxim-lobanov/setup-xcode@v1
-      with:
-        xcode-version: '26.x'
+    - name: Select Xcode
+      # Shared convention for the two self-hosted Macs (used identically by
+      # TempoStatusBar, namey and bonkus): resolve the newest Xcode installed on
+      # whichever runner picked up the job and export a job-scoped DEVELOPER_DIR.
+      # Never use setup-xcode or xcode-select here — those change the *machine's*
+      # active Xcode (via sudo) for every other repo sharing the runner.
+      run: |
+        newest=""
+        newest_key=""
+        for app in /Applications/Xcode*.app; do
+          [ -d "$app" ] || continue
+          case "$app" in *[Bb]eta*) continue ;; esac
+          ver=$(/usr/bin/defaults read "$app/Contents/version" CFBundleShortVersionString 2>/dev/null || echo 0)
+          key=$(echo "$ver" | awk -F. '{printf "%03d%03d%03d", $1, $2, $3}')
+          if [ -z "$newest" ] || [ "$key" \> "$newest_key" ]; then
+            newest="$app"; newest_key="$key"
+          fi
+        done
+        if [ -z "$newest" ]; then
+          echo "::error::No Xcode found under /Applications on runner $(hostname)"
+          exit 1
+        fi
+        echo "DEVELOPER_DIR=$newest/Contents/Developer" >> "$GITHUB_ENV"
+        DEVELOPER_DIR="$newest/Contents/Developer" xcodebuild -version
 
     - name: Generate version from PR and SHA
       id: version
@@ -55,17 +77,67 @@ jobs:
         security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
         security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-        security import "$CERT_PATH" -P "$SIGNING_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+        # Import the signing identity (cert + private key). Omit -t so pkcs12
+        # aggregate items (cert and key) are both imported.
+        security import "$CERT_PATH" -P "$SIGNING_CERT_PASSWORD" -A -f pkcs12 -k "$KEYCHAIN_PATH"
+
+        # Import the full Apple chain the leaf Developer ID cert may need: both
+        # "Developer ID Certification Authority" intermediates (G1 and G2 — the
+        # .p12 holds only the leaf + key, which may be issued by either) and both
+        # Apple roots (classic and G2 — the G2 intermediate chains to the G2
+        # root). GitHub-hosted images preinstall these in the system
+        # keychain; the shared self-hosted Macs do not, and codesign fails with
+        # "unable to build chain to self-signed root" / errSecInternalComponent
+        # when any link is missing (#133).
+        for CERT_URL in \
+          https://www.apple.com/certificateauthority/DeveloperIDCA.cer \
+          https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer \
+          https://www.apple.com/appleca/AppleIncRootCertificate.cer \
+          https://www.apple.com/certificateauthority/AppleRootCA-G2.cer; do
+          CHAIN_CER="$RUNNER_TEMP/$(basename "$CERT_URL")"
+          curl -fsSL -o "$CHAIN_CER" "$CERT_URL"
+          # `|| true`: re-importing an already-present cert exits non-zero, which
+          # would abort this `bash -e` step; the cert being present is fine.
+          security import "$CHAIN_CER" -t cert -k "$KEYCHAIN_PATH" || true
+          rm -f "$CHAIN_CER"
+        done
+
         security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
 
-        # Prepend temp keychain to search list so xcodebuild finds the identity
-        security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+        # Make the temp keychain the ONLY user keychain in the search list for
+        # the duration of the job (restored in the always() cleanup step). Two
+        # reasons, both from the shared self-hosted Macs being real machines
+        # with real login keychains:
+        #   1. The unit tests exercise the real Keychain under the production
+        #      service name — with the login keychain searchable they collide
+        #      with (and could delete) genuine stored credentials, and hang on
+        #      headless authorization prompts.
+        #   2. codesign builds its chain across every searchable keychain; a
+        #      duplicate/differently-trusted copy of the Developer ID certs in
+        #      the login keychain can poison chain building ("unable to build
+        #      chain to self-signed root").
+        security list-keychains -d user -s "$KEYCHAIN_PATH"
+
+        # Also make it the default keychain: on the self-hosted Macs the runner
+        # user has no GUI session, and codesign fails with errSecInternalComponent
+        # when the signing keychain is only in the search list. Restored to the
+        # login keychain in the always() cleanup step.
+        security default-keychain -d user -s "$KEYCHAIN_PATH"
 
         rm "$CERT_PATH"
 
         # Verify the identity is available for codesigning (no -v: self-signed certs
         # aren't "trusted" by the system, but codesign can still use them for signing)
         security find-identity -p codesigning "$KEYCHAIN_PATH"
+
+        # Diagnostics for chain-building failures on the self-hosted Macs: show
+        # the leaf's issuer and let the trust evaluator name the failing link.
+        # Non-fatal — the build step below is the real gate.
+        LEAF_PEM="$RUNNER_TEMP/leaf.pem"
+        security find-certificate -c "Developer ID Application" -p "$KEYCHAIN_PATH" > "$LEAF_PEM" || true
+        openssl x509 -in "$LEAF_PEM" -noout -subject -issuer -dates || true
+        security verify-cert -c "$LEAF_PEM" -p codeSign || echo "verify-cert failed (see above for the failing link)"
+        rm -f "$LEAF_PEM"
 
     - name: Build project
       run: |
@@ -88,6 +160,14 @@ jobs:
           build
 
     - name: Run unit tests
+      env:
+        # Skip the real-keychain CredentialManager tests: on the shared
+        # self-hosted Macs the runner user's login keychain holds genuine
+        # credentials under the production service name, and headless keychain
+        # access blocks on authorization dialogs (see PR #165). xcodebuild only
+        # forwards env vars prefixed TEST_RUNNER_ into the test-host process
+        # (prefix stripped), so the tests see TEMPO_SKIP_KEYCHAIN_TESTS=1.
+        TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS: "1"
       run: |
         echo "🧪 Running unit tests using local test script..."
         chmod +x ./run_tests.sh
@@ -101,7 +181,7 @@ jobs:
       with:
         name: test-results
         path: test-results.xcresult
-        retention-days: 7
+        retention-days: 3
 
     - name: Test summary
       if: always()
@@ -168,13 +248,18 @@ jobs:
 
     - name: Create DMG
       run: |
-        # Create a simple DMG structure
-        mkdir -p ./dmg/TempoStatusBarApp.app
+        set -euo pipefail
+        DMG_NAME="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
+
+        # Fresh staging directory each run.
+        rm -rf ./dmg
+        mkdir -p ./dmg
         cp -R ./build/TempoStatusBarApp.xcarchive/Products/Applications/TempoStatusBarApp.app ./dmg/
-        
-        # Create DMG (requires hdiutil)
-        hdiutil create -volname "TempoStatusBarApp" -srcfolder ./dmg -ov -format UDZO TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
-        
+
+        hdiutil create -volname "TempoStatusBarApp" -srcfolder ./dmg -ov -format UDZO "$DMG_NAME"
+
+        echo "Created $DMG_NAME"
+
     - name: Sign DMG
       if: github.event.pull_request.head.repo.full_name == github.repository
       run: |
@@ -315,33 +400,60 @@ jobs:
       if: always()
       run: |
         KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+        security list-keychains -d user -s login.keychain-db 2>/dev/null || true
+        security default-keychain -d user -s login.keychain-db 2>/dev/null || true
         security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
         rm -f "$RUNNER_TEMP/AuthKey.p8"
 
   code-quality:
     name: Code Quality
-    runs-on: macos-latest
-    
+    runs-on: [self-hosted, macos, tempo]
+    # Only two Macs serve three repos — a wedged job must not hold one for hours.
+    timeout-minutes: 15
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
-    - name: Setup Xcode
-      uses: maxim-lobanov/setup-xcode@v1
-      with:
-        xcode-version: '26.x'
+
+    - name: Select Xcode
+      # Shared convention for the two self-hosted Macs (used identically by
+      # TempoStatusBar, namey and bonkus): resolve the newest Xcode installed on
+      # whichever runner picked up the job and export a job-scoped DEVELOPER_DIR.
+      # Never use setup-xcode or xcode-select here — those change the *machine's*
+      # active Xcode (via sudo) for every other repo sharing the runner.
+      run: |
+        newest=""
+        newest_key=""
+        for app in /Applications/Xcode*.app; do
+          [ -d "$app" ] || continue
+          case "$app" in *[Bb]eta*) continue ;; esac
+          ver=$(/usr/bin/defaults read "$app/Contents/version" CFBundleShortVersionString 2>/dev/null || echo 0)
+          key=$(echo "$ver" | awk -F. '{printf "%03d%03d%03d", $1, $2, $3}')
+          if [ -z "$newest" ] || [ "$key" \> "$newest_key" ]; then
+            newest="$app"; newest_key="$key"
+          fi
+        done
+        if [ -z "$newest" ]; then
+          echo "::error::No Xcode found under /Applications on runner $(hostname)"
+          exit 1
+        fi
+        echo "DEVELOPER_DIR=$newest/Contents/Developer" >> "$GITHUB_ENV"
+        DEVELOPER_DIR="$newest/Contents/Developer" xcodebuild -version
 
     - name: Install SwiftLint
       run: |
-        brew install swiftlint
-        
+        # Self-hosted runners keep SwiftLint installed between runs; only install
+        # when missing. A bare `brew install` would try to upgrade an existing
+        # copy and fail on runners where the Homebrew prefix isn't user-writable.
+        command -v swiftlint || brew install swiftlint
+
     - name: Run SwiftLint
       run: |
         swiftlint lint --reporter github-actions-logging
         
   security-scan:
     name: Security Scan
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux]
     
     steps:
     - name: Checkout code
@@ -354,6 +466,7 @@ jobs:
         scan-ref: '.'
         format: 'sarif'
         output: 'trivy-results.sarif'
+        cache: 'false'
         
     - name: Upload Trivy scan results to GitHub Security tab
       uses: github/codeql-action/upload-sarif@v3

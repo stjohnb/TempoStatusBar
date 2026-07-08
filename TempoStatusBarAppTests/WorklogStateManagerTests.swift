@@ -55,12 +55,13 @@ final class WorklogStateManagerTests: XCTestCase {
         mockCredentialManager.mockCredentials = credentials
         mockCredentialManager.hasCredentialsResult = true
         
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
-        let threeDaysAgo = Calendar.current.date(byAdding: .day, value: -3, to: Date())!
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let threeDaysAgo = Calendar.current.startOfDay(
+            for: Calendar.current.date(byAdding: .day, value: -3, to: Date())!
+        )
         let worklog = Worklog(
-            dateStarted: formatter.string(from: threeDaysAgo),
+            dateStarted: isoFormatter.string(from: threeDaysAgo),
             timeSpentSeconds: 3600,
             comment: "Test work",
             issue: WorklogIssue(key: "TEST-123", summary: "Test issue")
@@ -112,6 +113,20 @@ final class WorklogStateManagerTests: XCTestCase {
         XCTAssertTrue(stateManager.errorMessage?.contains("Credential error") == true)
     }
 
+    func testCheckCredentialsAndRefresh_KeychainError() {
+        // Given
+        mockCredentialManager.hasCredentialsResult = true
+        mockCredentialManager.loadCredentialsError = CredentialError.keychainError(status: -25293)
+
+        // When
+        stateManager.checkCredentialsAndRefresh()
+
+        // Then
+        XCTAssertFalse(stateManager.hasCredentials)
+        XCTAssertEqual(stateManager.warningThreshold, 7) // Reset to default by clearData()
+        XCTAssertEqual(stateManager.lastError, .keychainError(status: -25293))
+    }
+
     func testCheckCredentialsAndRefresh_CredentialLoadError_NoStoredCredentials() {
         // Given: loadCredentials() throws noStoredCredentials
         mockCredentialManager.loadCredentialsError = CredentialError.noStoredCredentials
@@ -158,12 +173,13 @@ final class WorklogStateManagerTests: XCTestCase {
         mockCredentialManager.mockCredentials = credentials
         stateManager.hasCredentials = true
         
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
-        let twoDaysAgo = Calendar.current.date(byAdding: .day, value: -2, to: Date())!
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let twoDaysAgo = Calendar.current.startOfDay(
+            for: Calendar.current.date(byAdding: .day, value: -2, to: Date())!
+        )
         let worklog = Worklog(
-            dateStarted: formatter.string(from: twoDaysAgo),
+            dateStarted: isoFormatter.string(from: twoDaysAgo),
             timeSpentSeconds: 7200,
             comment: "Development work",
             issue: WorklogIssue(key: "DEV-456", summary: "Development task")
@@ -459,12 +475,13 @@ final class WorklogStateManagerTests: XCTestCase {
         mockCredentialManager.mockCredentials = credentials
         stateManager.hasCredentials = true
         
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
-        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let yesterday = Calendar.current.startOfDay(
+            for: Calendar.current.date(byAdding: .day, value: -1, to: Date())!
+        )
         let worklog = Worklog(
-            dateStarted: formatter.string(from: yesterday),
+            dateStarted: isoFormatter.string(from: yesterday),
             timeSpentSeconds: 3600,
             comment: "Test work",
             issue: WorklogIssue(key: "TEST-123", summary: "Test issue")
@@ -704,13 +721,27 @@ final class ConnectionTestTests: XCTestCase {
 // MARK: - CredentialManager.hasStoredCredentials() Tests
 
 final class CredentialManagerHasStoredCredentialsTests: XCTestCase {
-    override func setUp() {
-        super.setUp()
+    // This suite exercises the REAL keychain via CredentialManager.shared —
+    // including deleteCredentials() against the production service name in
+    // setUp/tearDown. On the shared self-hosted CI Macs the runner user's
+    // keychain holds genuine credentials and headless keychain access blocks
+    // on authorization dialogs, so CI sets TEMPO_SKIP_KEYCHAIN_TESTS=1 and the
+    // whole suite is skipped there. The skip must happen BEFORE setUp touches
+    // the keychain, hence setUpWithError.
+    override func setUpWithError() throws {
+        try XCTSkipIf(
+            ProcessInfo.processInfo.environment["TEMPO_SKIP_KEYCHAIN_TESTS"] == "1",
+            "Real-keychain tests are skipped on self-hosted CI runners"
+        )
         CredentialManager.shared.deleteCredentials()
     }
 
     override func tearDown() {
-        CredentialManager.shared.deleteCredentials()
+        // tearDown still runs when setUpWithError skips — keep it away from the
+        // real keychain under the same gate.
+        if ProcessInfo.processInfo.environment["TEMPO_SKIP_KEYCHAIN_TESTS"] != "1" {
+            CredentialManager.shared.deleteCredentials()
+        }
         super.tearDown()
     }
 
@@ -743,20 +774,23 @@ final class WorklogDaysSinceStartedTests: XCTestCase {
     }
 
     func testDaysSinceStarted_Today_ReturnsZero() {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
-        let todayString = formatter.string(from: Date())
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let today = Calendar.current.startOfDay(for: Date())
+        let todayString = isoFormatter.string(from: today)
 
         XCTAssertEqual(makeWorklog(dateStarted: todayString).daysSinceStarted, 0)
     }
 
     func testDaysSinceStarted_NDaysAgo_ReturnsN() {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
-        let fiveDaysAgo = Calendar.current.date(byAdding: .day, value: -5, to: Date())!
-        let dateString = formatter.string(from: fiveDaysAgo)
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        // Use local midnight 5 days ago so Calendar.current always sees an exact
+        // 5-day span regardless of what time of day the test runs.
+        let fiveDaysAgo = Calendar.current.startOfDay(
+            for: Calendar.current.date(byAdding: .day, value: -5, to: Date())!
+        )
+        let dateString = isoFormatter.string(from: fiveDaysAgo)
 
         XCTAssertEqual(makeWorklog(dateStarted: dateString).daysSinceStarted, 5)
     }
@@ -772,10 +806,12 @@ final class WorklogDaysSinceStartedTests: XCTestCase {
     }
 
     func testDaysSinceStarted_FutureDate_ReturnsNil() {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
-        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date())!
-        XCTAssertNil(makeWorklog(dateStarted: formatter.string(from: tomorrow)).daysSinceStarted)
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        // Use +2 days: dateComponents([.day]) rounds toward zero, so a delta of
+        // -23.999h (from time drift between Date() calls) truncates to 0, not -1,
+        // and the nil-on-negative check would silently pass.
+        let future = Calendar.current.date(byAdding: .day, value: 2, to: Date())!
+        XCTAssertNil(makeWorklog(dateStarted: isoFormatter.string(from: future)).daysSinceStarted)
     }
 }
