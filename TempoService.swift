@@ -1,4 +1,180 @@
 import Foundation
+import SwiftUI
+
+// MARK: - Protocols for Dependency Injection
+
+protocol CredentialManagerProtocol {
+    func hasStoredCredentials() -> Bool
+    func loadCredentials() throws -> CredentialManager.Credentials
+}
+
+protocol TempoServiceProtocol {
+    func fetchLatestWorklog(apiToken: String, jiraURL: String, accountId: String?) async throws -> Worklog?
+    func getDaysSinceLastWorklog(apiToken: String, jiraURL: String, accountId: String?) async -> Int?
+}
+
+// MARK: - Centralized State Management
+
+@MainActor
+class WorklogStateManager: ObservableObject {
+    static let shared = WorklogStateManager()
+    
+    @Published var daysSinceLastWorklog: Int?
+    @Published var latestWorklog: Worklog?
+    @Published var isLoading = false
+    @Published var errorMessage: String?
+    @Published var hasCredentials = false
+    @Published var warningThreshold = 7
+    
+    private var refreshTimer: Timer?
+    
+    // Dependency injection for testing
+    var credentialManager: CredentialManagerProtocol = CredentialManager.shared
+    var tempoService: TempoServiceProtocol = TempoService.shared
+    
+    init() {
+        setupTimer()
+        checkCredentialsAndRefresh()
+    }
+    
+    deinit {
+        refreshTimer?.invalidate()
+    }
+    
+    // MARK: - Public Methods
+    
+    func refresh() {
+        Task {
+            await loadTempoData()
+        }
+    }
+    
+    func checkCredentialsAndRefresh() {
+        hasCredentials = credentialManager.hasStoredCredentials()
+        if hasCredentials {
+            // Load the warning threshold from credentials
+            do {
+                let credentials = try credentialManager.loadCredentials()
+                warningThreshold = credentials.warningThreshold
+            } catch {
+                // If we can't load credentials, use default value
+                warningThreshold = 7
+            }
+            refresh()
+        } else {
+            // Clear any existing data when no credentials are available
+            clearData()
+        }
+    }
+    
+    // MARK: - Private Methods
+    
+    private func setupTimer() {
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
+            Task { @MainActor in
+                await self.loadTempoData()
+            }
+        }
+    }
+    
+    func clearData() {
+        daysSinceLastWorklog = nil
+        latestWorklog = nil
+        errorMessage = nil
+        warningThreshold = 7
+    }
+    
+    func resetForTesting() {
+        clearData()
+        hasCredentials = false
+        isLoading = false
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+    }
+    
+    func loadTempoData() async {
+        guard hasCredentials else { return }
+        
+        isLoading = true
+        errorMessage = nil
+        
+        do {
+            let credentials = try credentialManager.loadCredentials()
+            
+            // Fetch the actual worklog data
+            let worklog = try await tempoService.fetchLatestWorklog(
+                apiToken: credentials.apiToken,
+                jiraURL: credentials.jiraURL,
+                accountId: credentials.accountId.isEmpty ? nil : credentials.accountId
+            )
+            
+            // Calculate days since last worklog
+            let days = await tempoService.getDaysSinceLastWorklog(
+                apiToken: credentials.apiToken,
+                jiraURL: credentials.jiraURL,
+                accountId: credentials.accountId.isEmpty ? nil : credentials.accountId
+            )
+            
+            isLoading = false
+            latestWorklog = worklog
+            daysSinceLastWorklog = days
+            
+        } catch {
+            isLoading = false
+            if let credentialError = error as? CredentialError {
+                switch credentialError {
+                case .noStoredCredentials:
+                    errorMessage = "No credentials configured"
+                    hasCredentials = false
+                case .decodingFailed(let error):
+                    errorMessage = "Credential error: \(error.localizedDescription)"
+                }
+            } else if let tempoError = error as? TempoError {
+                errorMessage = "Tempo error: \(tempoError.localizedDescription)"
+            } else {
+                errorMessage = "Error: \(error.localizedDescription)"
+            }
+        }
+    }
+}
+
+// MARK: - Computed Properties for Status Display
+
+extension WorklogStateManager {
+    var statusEmoji: String {
+        guard let days = daysSinceLastWorklog else { return "" }
+        if days <= warningThreshold {
+            return "✅"
+        } else if days <= warningThreshold + 1 {
+            return "⏰"
+        } else {
+            return "🚨"
+        }
+    }
+    
+    var statusColor: Color {
+        guard let days = daysSinceLastWorklog else { return .secondary }
+        if days <= warningThreshold {
+            return .green
+        } else if days <= warningThreshold + 1 {
+            return .orange
+        } else {
+            return .red
+        }
+    }
+    
+    var statusBarTitle: String {
+        guard let days = daysSinceLastWorklog else { return "⏱️" }
+        return "\(statusEmoji) \(days)"
+    }
+    
+    var statusBarTooltip: String {
+        guard let days = daysSinceLastWorklog else { return "No worklog data available" }
+        return "Last worklog: \(days) day\(days == 1 ? "" : "s") ago"
+    }
+}
+
+// MARK: - Existing Code
 
 struct WorklogResponse: Codable {
     let results: [Worklog]
@@ -37,7 +213,7 @@ struct UserInfo: Codable {
     }
 }
 
-class TempoService {
+class TempoService: TempoServiceProtocol {
     static let shared = TempoService()
     private init() {}
     

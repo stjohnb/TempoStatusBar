@@ -35,6 +35,35 @@ jobs:
           -configuration Release \
           -destination 'platform=macOS' \
           build
+
+    - name: Run unit tests
+      run: |
+        echo "🧪 Running unit tests using local test script..."
+        chmod +x ./run_tests.sh
+        ./run_tests.sh
+        
+        echo "✅ Unit tests completed successfully"
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: test-results.xcresult
+        retention-days: 30
+
+    - name: Test summary
+      if: always()
+      run: |
+        echo "📊 Test Summary:"
+        echo "=================="
+        if [ -d "test-results.xcresult" ]; then
+          echo "✅ Test results generated successfully"
+          echo "📁 Test results saved as artifact: test-results"
+          echo "🔍 View test results in the Actions tab"
+        else
+          echo "⚠️  No test results found"
+        fi
           
     - name: Archive app
       run: |

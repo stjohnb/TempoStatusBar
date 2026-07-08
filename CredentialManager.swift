@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-class CredentialManager {
+class CredentialManager: CredentialManagerProtocol {
     static let shared = CredentialManager()
     
     private let userDefaultsKey = "TempoStatusBarApp_Credentials"
@@ -115,5 +115,4 @@ enum CredentialError: Error, LocalizedError {
 // Notification name for credential changes
 extension Notification.Name {
     static let credentialsChanged = Notification.Name("credentialsChanged")
-    static let worklogDataRefreshed = Notification.Name("worklogDataRefreshed")
 } 
