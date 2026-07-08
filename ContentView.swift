@@ -16,13 +16,10 @@ struct ContentView: View {
     }
     
     private func formatDate(_ dateString: String) -> String {
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
-        
-        guard let date = dateFormatter.date(from: dateString) else {
+        guard let date = Worklog.parseDate(dateString) else {
             return dateString
         }
-        
+
         let displayFormatter = DateFormatter()
         displayFormatter.dateStyle = .medium
         displayFormatter.timeStyle = .short
@@ -133,12 +130,6 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
-        }
-        .onChange(of: showingSettings) { newValue in
-            if !newValue {
-                // Settings sheet was dismissed, check if credentials were updated
-                stateManager.checkCredentialsAndRefresh()
-            }
         }
     }
 }

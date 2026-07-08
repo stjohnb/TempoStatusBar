@@ -1,4 +1,5 @@
 import SwiftUI
+import OSLog
 
 struct MacOSTextField: View {
     let placeholder: String
@@ -28,6 +29,7 @@ struct MacOSTextField: View {
 }
 
 struct SettingsView: View {
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "TempoStatusBar", category: "SettingsView")
     @State private var apiToken = ""
     @State private var accountId = ""
     @State private var jiraURL = ""
@@ -184,7 +186,7 @@ struct SettingsView: View {
             warningThreshold = credentials.warningThreshold
         } catch {
             // No stored credentials or error loading them - this is normal for first-time users
-            print("No stored credentials found: \(error.localizedDescription)")
+            logger.info("No stored credentials found: \(error.localizedDescription)")
         }
     }
     

@@ -1,12 +1,15 @@
 import Cocoa
 import SwiftUI
 import Combine
+import OSLog
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusBarItem: NSStatusItem!
     var popover: NSPopover!
     private let stateManager = WorklogStateManager.shared
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "TempoStatusBar", category: "AppDelegate")
+    private var credentialObserver: NSObjectProtocol?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Add minimal main menu with Edit > Paste
@@ -52,7 +55,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(statusItem)
         
         menu.addItem(NSMenuItem.separator())
-        
+
+        // About option
+        let aboutItem = NSMenuItem(title: "About TempoStatusBar", action: #selector(showAbout), keyEquivalent: "")
+        aboutItem.target = self
+        menu.addItem(aboutItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         // Settings option - shows settings view
         let settingsItem = NSMenuItem(title: "Settings", action: #selector(showSettings), keyEquivalent: "")
         settingsItem.target = self
@@ -69,7 +79,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusBarItem.menu = menu
         
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 300, height: 200)
+        popover.contentSize = NSSize(width: 350, height: 280)
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: ContentView())
     }
@@ -97,15 +107,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     func setupCredentialObserver() {
         // Listen for credential changes and update status bar immediately
-        NotificationCenter.default.addObserver(
+        credentialObserver = NotificationCenter.default.addObserver(
             forName: .credentialsChanged,
             object: nil,
             queue: .main
         ) { _ in
-            print("Debug: AppDelegate - Credentials changed, updating status bar...")
+            self.logger.debug("Credentials changed, updating status bar")
             Task { @MainActor in
                 self.stateManager.checkCredentialsAndRefresh()
             }
+        }
+    }
+    
+    deinit {
+        // Remove the credential observer to prevent memory leaks
+        if let observer = credentialObserver {
+            NotificationCenter.default.removeObserver(observer)
         }
     }
     
@@ -127,16 +144,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             settingsPopover.behavior = .applicationDefined
             settingsPopover.contentViewController = NSHostingController(rootView: SettingsView())
             
-            // Add a notification observer to refresh status bar when popover closes
+            // Add a notification observer to clean up when popover closes
             NotificationCenter.default.addObserver(
                 forName: NSPopover.didCloseNotification,
                 object: settingsPopover,
                 queue: .main
             ) { _ in
-                // Refresh the status bar when settings popover is closed
-                Task { @MainActor in
-                    self.stateManager.checkCredentialsAndRefresh()
-                }
                 // Remove the observer to avoid memory leaks
                 NotificationCenter.default.removeObserver(self, name: NSPopover.didCloseNotification, object: settingsPopover)
             }
@@ -145,6 +158,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    @objc func showAbout() {
+        let alert = NSAlert()
+        alert.messageText = "TempoStatusBar"
+        alert.informativeText = "Version \(appVersion)\n\nA macOS menu bar app for monitoring Jira Tempo worklogs."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
     @objc func quitApp() {
         NSApplication.shared.terminate(nil)
     }
@@ -173,19 +195,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Handle normal state
             button.title = stateManager.statusBarTitle
             
-            if let days = stateManager.daysSinceLastWorklog {
-                let color: NSColor
-                if days <= stateManager.warningThreshold {
-                    color = .systemGreen
-                } else if days <= stateManager.warningThreshold + 1 {
-                    color = .systemOrange
-                } else {
-                    color = .systemRed
-                }
-                
+            if stateManager.daysSinceLastWorklog != nil {
                 button.attributedTitle = NSAttributedString(
                     string: stateManager.statusBarTitle,
-                    attributes: [.foregroundColor: color]
+                    attributes: [.foregroundColor: stateManager.statusBarColor]
                 )
             }
             

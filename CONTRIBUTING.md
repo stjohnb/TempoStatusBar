@@ -83,6 +83,7 @@ The project uses several GitHub Actions workflows:
 - Includes SwiftLint checks
 - Performs security scanning with Trivy
 - Creates DMG artifacts for testing
+- **Automatically posts a comment** on the PR with a link to download the DMG build once the build-and-test job completes. The comment is updated on each subsequent push to the PR, so there is always a single comment pointing to the latest build. Artifacts expire after 7 days.
 
 ### Release Verification
 - Runs on pushes to main branch and manual dispatch

@@ -54,21 +54,24 @@ final class WorklogStateManagerTests: XCTestCase {
         mockCredentialManager.mockCredentials = credentials
         mockCredentialManager.hasCredentialsResult = true
         
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
+        let threeDaysAgo = Calendar.current.date(byAdding: .day, value: -3, to: Date())!
         let worklog = Worklog(
-            dateStarted: "2024-01-15T10:00:00.000",
+            dateStarted: formatter.string(from: threeDaysAgo),
             timeSpentSeconds: 3600,
             comment: "Test work",
             issue: WorklogIssue(key: "TEST-123", summary: "Test issue")
         )
         mockTempoService.mockWorklog = worklog
-        mockTempoService.mockDaysSinceLastWorklog = 3
-        
+
         // When
         stateManager.checkCredentialsAndRefresh()
-        
+
         // Wait for async operations
         await Task.sleep(100_000_000) // 0.1 seconds
-        
+
         // Then
         XCTAssertTrue(stateManager.hasCredentials)
         XCTAssertEqual(stateManager.warningThreshold, 5)
@@ -96,16 +99,30 @@ final class WorklogStateManagerTests: XCTestCase {
         // Given
         mockCredentialManager.hasCredentialsResult = true
         mockCredentialManager.loadCredentialsError = CredentialError.decodingFailed(error: NSError(domain: "test", code: 1))
-        
+
         // When
         stateManager.checkCredentialsAndRefresh()
-        
-        // Wait for async operations
-        await Task.sleep(100_000_000) // 0.1 seconds
-        
+
+        // Then: corrupt/unreadable credentials are treated as no usable credentials,
+        // and an error message is surfaced so the user is not left with a silent failure.
+        XCTAssertFalse(stateManager.hasCredentials)
+        XCTAssertEqual(stateManager.warningThreshold, 7) // Reset to default by clearData()
+        XCTAssertNotNil(stateManager.errorMessage)
+        XCTAssertTrue(stateManager.errorMessage?.contains("Credential error") == true)
+    }
+
+    func testCheckCredentialsAndRefresh_CredentialLoadError_NoStoredCredentials() {
+        // Given: hasStoredCredentials() returns true but loadCredentials() throws
+        // noStoredCredentials — e.g., one UserDefaults key is deleted between the two calls.
+        mockCredentialManager.hasCredentialsResult = true
+        mockCredentialManager.loadCredentialsError = CredentialError.noStoredCredentials
+
+        // When
+        stateManager.checkCredentialsAndRefresh()
+
         // Then
-        XCTAssertTrue(stateManager.hasCredentials)
-        XCTAssertEqual(stateManager.warningThreshold, 7) // Default value
+        XCTAssertFalse(stateManager.hasCredentials)
+        XCTAssertEqual(stateManager.warningThreshold, 7)
         XCTAssertNotNil(stateManager.errorMessage)
         XCTAssertTrue(stateManager.errorMessage?.contains("Credential error") == true)
     }
@@ -123,18 +140,21 @@ final class WorklogStateManagerTests: XCTestCase {
         mockCredentialManager.mockCredentials = credentials
         stateManager.hasCredentials = true
         
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
+        let twoDaysAgo = Calendar.current.date(byAdding: .day, value: -2, to: Date())!
         let worklog = Worklog(
-            dateStarted: "2024-01-15T10:00:00.000",
+            dateStarted: formatter.string(from: twoDaysAgo),
             timeSpentSeconds: 7200,
             comment: "Development work",
             issue: WorklogIssue(key: "DEV-456", summary: "Development task")
         )
         mockTempoService.mockWorklog = worklog
-        mockTempoService.mockDaysSinceLastWorklog = 2
-        
+
         // When
         await stateManager.loadTempoData()
-        
+
         // Then
         XCTAssertEqual(stateManager.latestWorklog?.comment, "Development work")
         XCTAssertEqual(stateManager.daysSinceLastWorklog, 2)
@@ -354,21 +374,24 @@ final class WorklogStateManagerTests: XCTestCase {
         mockCredentialManager.mockCredentials = credentials
         stateManager.hasCredentials = true
         
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date())!
         let worklog = Worklog(
-            dateStarted: "2024-01-15T10:00:00.000",
+            dateStarted: formatter.string(from: yesterday),
             timeSpentSeconds: 3600,
             comment: "Test work",
             issue: WorklogIssue(key: "TEST-123", summary: "Test issue")
         )
         mockTempoService.mockWorklog = worklog
-        mockTempoService.mockDaysSinceLastWorklog = 1
-        
+
         // When
         stateManager.refresh()
-        
+
         // Wait for async operations
         await Task.sleep(100_000_000) // 0.1 seconds
-        
+
         // Then
         XCTAssertEqual(stateManager.latestWorklog?.comment, "Test work")
         XCTAssertEqual(stateManager.daysSinceLastWorklog, 1)
@@ -485,20 +508,91 @@ class MockCredentialManager: CredentialManagerProtocol {
 
 class MockTempoService: TempoServiceProtocol {
     var mockWorklog: Worklog?
-    var mockDaysSinceLastWorklog: Int?
     var mockError: Error?
-    
+
     func fetchLatestWorklog(apiToken: String, jiraURL: String, accountId: String? = nil) async throws -> Worklog? {
         if let error = mockError {
             throw error
         }
         return mockWorklog
     }
-    
-    func getDaysSinceLastWorklog(apiToken: String, jiraURL: String, accountId: String? = nil) async -> Int? {
-        if let error = mockError {
-            return nil
-        }
-        return mockDaysSinceLastWorklog
+}
+
+// MARK: - CredentialManager.hasStoredCredentials() Tests
+
+final class CredentialManagerHasStoredCredentialsTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        CredentialManager.shared.deleteCredentials()
     }
-} 
+
+    override func tearDown() {
+        CredentialManager.shared.deleteCredentials()
+        super.tearDown()
+    }
+
+    func testHasStoredCredentials_NoCredentials_ReturnsFalse() {
+        XCTAssertFalse(CredentialManager.shared.hasStoredCredentials())
+    }
+
+    func testHasStoredCredentials_AfterSave_ReturnsTrue() throws {
+        try CredentialManager.shared.saveCredentials(
+            apiToken: "token", accountId: "account", jiraURL: "https://jira.example.com"
+        )
+        XCTAssertTrue(CredentialManager.shared.hasStoredCredentials())
+    }
+
+    func testHasStoredCredentials_AfterDelete_ReturnsFalse() throws {
+        try CredentialManager.shared.saveCredentials(
+            apiToken: "token", accountId: "account", jiraURL: "https://jira.example.com"
+        )
+        CredentialManager.shared.deleteCredentials()
+        XCTAssertFalse(CredentialManager.shared.hasStoredCredentials())
+    }
+}
+
+// MARK: - Worklog.daysSinceStarted Tests
+
+final class WorklogDaysSinceStartedTests: XCTestCase {
+
+    private func makeWorklog(dateStarted: String) -> Worklog {
+        Worklog(dateStarted: dateStarted, timeSpentSeconds: 3600, comment: nil, issue: nil)
+    }
+
+    func testDaysSinceStarted_Today_ReturnsZero() {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
+        let todayString = formatter.string(from: Date())
+
+        XCTAssertEqual(makeWorklog(dateStarted: todayString).daysSinceStarted, 0)
+    }
+
+    func testDaysSinceStarted_NDaysAgo_ReturnsN() {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
+        let fiveDaysAgo = Calendar.current.date(byAdding: .day, value: -5, to: Date())!
+        let dateString = formatter.string(from: fiveDaysAgo)
+
+        XCTAssertEqual(makeWorklog(dateStarted: dateString).daysSinceStarted, 5)
+    }
+
+    func testDaysSinceStarted_MalformedDate_ReturnsNil() {
+        XCTAssertNil(makeWorklog(dateStarted: "not-a-date").daysSinceStarted)
+    }
+
+    func testDaysSinceStarted_DateWithTimezoneSuffix_ReturnsValidInt() {
+        // ISO8601DateFormatter handles timezone suffixes; result should be a non-nil integer.
+        let result = makeWorklog(dateStarted: "2024-01-15T10:00:00.000+00:00").daysSinceStarted
+        XCTAssertNotNil(result)
+    }
+
+    func testDaysSinceStarted_FutureDate_ReturnsNil() {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date())!
+        XCTAssertNil(makeWorklog(dateStarted: formatter.string(from: tomorrow)).daysSinceStarted)
+    }
+}

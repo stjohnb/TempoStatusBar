@@ -9,6 +9,10 @@ permissions:
   actions: read
   contents: write
 
+concurrency:
+  group: main-verification-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   main-build:
     name: Main Build
@@ -21,13 +25,40 @@ jobs:
     - name: Setup Xcode
       uses: maxim-lobanov/setup-xcode@v1
       with:
-        xcode-version: '15.0'
-        
+        xcode-version: '26.x'
+
     - name: Generate version timestamp
       id: version
       run: |
         echo "version=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
-        
+
+    - name: Import signing certificate
+      env:
+        SIGNING_CERT_P12_BASE64: ${{ secrets.SIGNING_CERT_P12_BASE64 }}
+        SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      run: |
+        CERT_PATH="$RUNNER_TEMP/signing.p12"
+        KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+
+        echo "$SIGNING_CERT_P12_BASE64" | base64 --decode -o "$CERT_PATH"
+
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+        security import "$CERT_PATH" -P "$SIGNING_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+
+        # Prepend temp keychain to search list so xcodebuild finds the identity
+        security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
+        rm "$CERT_PATH"
+
+        # Verify the identity is available for codesigning (no -v: self-signed certs
+        # aren't "trusted" by the system, but codesign can still use them for signing)
+        security find-identity -p codesigning "$KEYCHAIN_PATH"
+
     - name: Build main version
       run: |
         xcodebuild -project TempoStatusBarApp.xcodeproj \
@@ -88,10 +119,16 @@ jobs:
       with:
         name: TempoStatusBarApp-${{ steps.version.outputs.version }}
         path: TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
-        
+
+    - name: Clean up signing keychain
+      if: always()
+      run: |
+        KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+        security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+
   security-check:
     name: Security Check
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     
     steps:
     - name: Checkout code
@@ -114,7 +151,7 @@ jobs:
 
   documentation-check:
     name: Documentation Check
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     
     steps:
     - name: Checkout code

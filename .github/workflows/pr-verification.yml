@@ -9,20 +9,70 @@ permissions:
   actions: read
   contents: read
 
+concurrency:
+  group: pr-verification-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     name: Build and Test
     runs-on: macos-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+      with:
+        fetch-depth: 0
+
     - name: Setup Xcode
       uses: maxim-lobanov/setup-xcode@v1
       with:
-        xcode-version: '15.0'
-        
+        xcode-version: '26.x'
+
+    - name: Generate version from PR and SHA
+      id: version
+      run: |
+        git fetch --tags
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
+        LATEST_TAG="${LATEST_TAG#v}"
+        VERSION="${LATEST_TAG}-pr-${{ github.event.number }}-$(git rev-parse --short HEAD)"
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+    - name: Set MARKETING_VERSION
+      run: |
+        agvtool new-marketing-version "${{ steps.version.outputs.version }}"
+
+    - name: Import signing certificate
+      env:
+        SIGNING_CERT_P12_BASE64: ${{ secrets.SIGNING_CERT_P12_BASE64 }}
+        SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      run: |
+        CERT_PATH="$RUNNER_TEMP/signing.p12"
+        KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+
+        echo "$SIGNING_CERT_P12_BASE64" | base64 --decode -o "$CERT_PATH"
+
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+        security import "$CERT_PATH" -P "$SIGNING_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+
+        # Prepend temp keychain to search list so xcodebuild finds the identity
+        security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
+        rm "$CERT_PATH"
+
+        # Verify the identity is available for codesigning (no -v: self-signed certs
+        # aren't "trusted" by the system, but codesign can still use them for signing)
+        security find-identity -p codesigning "$KEYCHAIN_PATH"
+
     - name: Build project
       run: |
         xcodebuild -project TempoStatusBarApp.xcodeproj \
@@ -30,13 +80,14 @@ jobs:
           -configuration Debug \
           -destination 'platform=macOS' \
           build
-          
+
     - name: Build for release
       run: |
         xcodebuild -project TempoStatusBarApp.xcodeproj \
           -scheme TempoStatusBarApp \
           -configuration Release \
           -destination 'platform=macOS' \
+          MARKETING_VERSION="${{ steps.version.outputs.version }}" \
           build
 
     - name: Run unit tests
@@ -76,6 +127,7 @@ jobs:
           -scheme TempoStatusBarApp \
           -configuration Release \
           -destination 'platform=macOS' \
+          MARKETING_VERSION="${{ steps.version.outputs.version }}" \
           archive \
           -archivePath ./build/TempoStatusBarApp.xcarchive
           
@@ -91,11 +143,6 @@ jobs:
           exit 1
         fi 
         
-    - name: Generate version from PR and SHA
-      id: version
-      run: |
-        echo "version=pr-${{ github.event.number }}-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-                  
     - name: Create DMG
       run: |
         # Create a simple DMG structure
@@ -111,7 +158,76 @@ jobs:
         name: TempoStatusBarApp-${{ steps.version.outputs.version }}
         path: TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
         retention-days: 7
-        
+
+    - name: Comment PR with build artifact link
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      continue-on-error: true
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const artifactName = `TempoStatusBarApp-${{ steps.version.outputs.version }}`;
+          const runUrl = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+          const marker = '<!-- pr-build-comment -->';
+
+          // Get the artifact ID for a direct download link
+          const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            run_id: context.runId,
+          });
+          const artifact = artifacts.data.artifacts.find(a => a.name === artifactName);
+          const downloadUrl = artifact
+            ? `${runUrl}/artifacts/${artifact.id}`
+            : runUrl;
+
+          const body = [
+            marker,
+            '## PR Build Available',
+            '',
+            'A macOS DMG build for this PR is ready to download.',
+            '',
+            '| | |',
+            '|---|---|',
+            `| **Artifact** | \`${artifactName}\` |`,
+            `| **Download** | [Download DMG](${downloadUrl}) |`,
+            '| **Expires** | 7 days after this run |',
+            '',
+            '**To install:**',
+            '1. Click the download link above',
+            '2. Open the `.dmg`, drag **TempoStatusBarApp** to Applications',
+            '',
+            '> This comment is updated automatically on each push to this PR.',
+          ].join('\n');
+
+          const allComments = await github.paginate(github.rest.issues.listComments, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+          const existing = allComments.find(c => c.body.includes(marker));
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+          }
+
+    - name: Clean up signing keychain
+      if: always()
+      run: |
+        KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+        security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+
   code-quality:
     name: Code Quality
     runs-on: macos-latest
@@ -123,8 +239,8 @@ jobs:
     - name: Setup Xcode
       uses: maxim-lobanov/setup-xcode@v1
       with:
-        xcode-version: '15.0'
-        
+        xcode-version: '26.x'
+
     - name: Install SwiftLint
       run: |
         brew install swiftlint
@@ -135,7 +251,7 @@ jobs:
         
   security-scan:
     name: Security Scan
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     
     steps:
     - name: Checkout code

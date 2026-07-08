@@ -46,7 +46,7 @@ excluded:
   - .github
   - build
   - DerivedData
-  - *.generated.swift
+  - "*.generated.swift"
 
 # Custom rules for this project
 custom_rules:
