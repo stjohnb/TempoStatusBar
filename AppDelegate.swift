@@ -140,7 +140,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusBarItem.button {
             // Create a settings popover
             let settingsPopover = NSPopover()
-            settingsPopover.contentSize = NSSize(width: 400, height: 500)
+            settingsPopover.contentSize = NSSize(width: 400, height: 560)
             settingsPopover.behavior = .applicationDefined
             settingsPopover.contentViewController = NSHostingController(rootView: SettingsView())
             

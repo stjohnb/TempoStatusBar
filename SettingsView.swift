@@ -34,6 +34,8 @@ struct SettingsView: View {
     @State private var accountId = ""
     @State private var jiraURL = ""
     @State private var warningThreshold = 7
+    @State private var launchAtLogin: Bool = LaunchAtLoginManager.shared.isEnabled
+    @State private var launchAtLoginError: String?
     @State private var isTestingConnection = false
     @State private var isDetectingUser = false
     @State private var testResult: String?
@@ -161,6 +163,39 @@ struct SettingsView: View {
                 .buttonStyle(.bordered)
             }
             
+            VStack(alignment: .leading, spacing: 8) {
+                Text("App Settings")
+                    .font(.headline)
+                if #available(macOS 13.0, *) {
+                    Toggle("Launch at Login", isOn: Binding(
+                        get: { launchAtLogin },
+                        set: { newValue in
+                            do {
+                                try LaunchAtLoginManager.shared.setEnabled(newValue)
+                                launchAtLogin = newValue
+                                launchAtLoginError = nil
+                            } catch {
+                                launchAtLogin = !newValue
+                                launchAtLoginError = error.localizedDescription
+                            }
+                        }
+                    ))
+                    if let error = launchAtLoginError {
+                        Text(error)
+                            .foregroundColor(.red)
+                            .font(.caption)
+                    }
+                } else {
+                    HStack {
+                        Text("Launch at Login")
+                        Spacer()
+                        Text("Requires macOS 13 or later")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    }
+                }
+            }
+
             if CredentialManager.shared.hasStoredCredentials() {
                 Button("Clear Stored Credentials") {
                     clearStoredCredentials()
@@ -170,9 +205,10 @@ struct SettingsView: View {
             }
         }
         .padding()
-        .frame(width: 400, height: 500)
+        .frame(width: 400, height: 560)
         .onAppear {
             loadStoredCredentials()
+            launchAtLogin = LaunchAtLoginManager.shared.isEnabled
         }
         .background(Color(NSColor.controlBackgroundColor))
     }

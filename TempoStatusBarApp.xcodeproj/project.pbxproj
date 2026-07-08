@@ -12,6 +12,7 @@
 		A1234567890123456789013A /* TempoService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1234567890123456789013B /* TempoService.swift */; };
 		A1234567890123456789013E /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1234567890123456789013F /* SettingsView.swift */; };
 		A1234567890123456789013G /* CredentialManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1234567890123456789013H /* CredentialManager.swift */; };
+		AA23456789012345678901LA /* LaunchAtLoginManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA23456789012345678901LB /* LaunchAtLoginManager.swift */; };
 		A1234567890123456789017C /* AppVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1234567890123456789017B /* AppVersion.swift */; };
 /* End PBXBuildFile section */
 
@@ -21,6 +22,7 @@
 		A1234567890123456789013B /* TempoService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TempoService.swift; sourceTree = "<group>"; };
 		A1234567890123456789013F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A1234567890123456789013H /* CredentialManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialManager.swift; sourceTree = "<group>"; };
+		AA23456789012345678901LB /* LaunchAtLoginManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAtLoginManager.swift; sourceTree = "<group>"; };
 		A1234567890123456789014A /* TempoStatusBarApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TempoStatusBarApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1234567890123456789017B /* AppVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppVersion.swift; path = AppVersion.swift; sourceTree = DERIVED_FILE_DIR; };
 /* End PBXFileReference section */
@@ -66,6 +68,7 @@
 				A1234567890123456789013B /* TempoService.swift */,
 				A1234567890123456789013F /* SettingsView.swift */,
 				A1234567890123456789013H /* CredentialManager.swift */,
+				AA23456789012345678901LB /* LaunchAtLoginManager.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -159,6 +162,7 @@
 				A1234567890123456789013A /* TempoService.swift in Sources */,
 				A1234567890123456789013E /* SettingsView.swift in Sources */,
 				A1234567890123456789013G /* CredentialManager.swift in Sources */,
+				AA23456789012345678901LA /* LaunchAtLoginManager.swift in Sources */,
 				A1234567890123456789017C /* AppVersion.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

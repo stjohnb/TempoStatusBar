@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
 permissions:
   security-events: write
-  actions: read
   contents: read
 
 concurrency:
@@ -18,9 +17,8 @@ jobs:
     name: Build and Test
     runs-on: macos-latest
     permissions:
-      contents: read
+      contents: write
       pull-requests: write
-      actions: read
     
     steps:
     - name: Checkout code
@@ -41,10 +39,6 @@ jobs:
         LATEST_TAG="${LATEST_TAG#v}"
         VERSION="${LATEST_TAG}-pr-${{ github.event.number }}-$(git rev-parse --short HEAD)"
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
-
-    - name: Set MARKETING_VERSION
-      run: |
-        agvtool new-marketing-version "${{ steps.version.outputs.version }}"
 
     - name: Import signing certificate
       env:
@@ -141,8 +135,27 @@ jobs:
         else
           echo "❌ App bundle structure is incorrect"
           exit 1
-        fi 
-        
+        fi
+
+    - name: Verify code signature
+      run: |
+        APP_PATH="./build/TempoStatusBarApp.xcarchive/Products/Applications/TempoStatusBarApp.app"
+
+        echo "=== codesign --display --verbose=4 ==="
+        codesign --display --verbose=4 "$APP_PATH"
+
+        echo "=== Designated requirement ==="
+        codesign --display --requirements - "$APP_PATH"
+
+        echo "=== codesign --verify --deep --strict ==="
+        codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+        echo "=== Identity must be 'TempoStatusBar Signing' ==="
+        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=TempoStatusBar Signing' \
+          || { echo "❌ Expected Authority=TempoStatusBar Signing not found"; exit 1; }
+
+        echo "✅ Code signature verified"
+
     - name: Create DMG
       run: |
         # Create a simple DMG structure
@@ -152,12 +165,32 @@ jobs:
         # Create DMG (requires hdiutil)
         hdiutil create -volname "TempoStatusBarApp" -srcfolder ./dmg -ov -format UDZO TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
         
-    - name: Upload DMG artifact
-      uses: actions/upload-artifact@v4
+    - name: Delete previous PR pre-release (if any)
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release delete "pr-${{ github.event.number }}" \
+          --yes --cleanup-tag \
+          --repo "${{ github.repository }}" 2>/dev/null || true
+
+    - name: Publish DMG to PR pre-release
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
       with:
-        name: TempoStatusBarApp-${{ steps.version.outputs.version }}
-        path: TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
-        retention-days: 7
+        tag_name: pr-${{ github.event.number }}
+        name: PR #${{ github.event.number }} build (${{ steps.version.outputs.version }})
+        prerelease: true
+        make_latest: 'false'
+        target_commitish: ${{ github.event.pull_request.head.sha }}
+        files: TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
+        body: |
+          Auto-generated build for PR #${{ github.event.number }}.
+
+          Commit: ${{ github.event.pull_request.head.sha }}
+          Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          This pre-release is automatically deleted when the PR closes.
 
     - name: Comment PR with build artifact link
       if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
@@ -165,38 +198,30 @@ jobs:
       uses: actions/github-script@v7
       with:
         script: |
-          const artifactName = `TempoStatusBarApp-${{ steps.version.outputs.version }}`;
-          const runUrl = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+          const tag = `pr-${{ github.event.number }}`;
+          const version = `${{ steps.version.outputs.version }}`;
+          const dmgName = `TempoStatusBarApp-${version}.dmg`;
+          const releaseUrl = `${{ github.server_url }}/${{ github.repository }}/releases/tag/${tag}`;
+          const downloadUrl = `${{ github.server_url }}/${{ github.repository }}/releases/download/${tag}/${dmgName}`;
           const marker = '<!-- pr-build-comment -->';
-
-          // Get the artifact ID for a direct download link
-          const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            run_id: context.runId,
-          });
-          const artifact = artifacts.data.artifacts.find(a => a.name === artifactName);
-          const downloadUrl = artifact
-            ? `${runUrl}/artifacts/${artifact.id}`
-            : runUrl;
 
           const body = [
             marker,
             '## PR Build Available',
             '',
-            'A macOS DMG build for this PR is ready to download.',
+            'A signed macOS DMG for this PR is published as a pre-release.',
             '',
             '| | |',
             '|---|---|',
-            `| **Artifact** | \`${artifactName}\` |`,
-            `| **Download** | [Download DMG](${downloadUrl}) |`,
-            '| **Expires** | 7 days after this run |',
+            `| **Version** | \`${version}\` |`,
+            `| **Download** | [${dmgName}](${downloadUrl}) |`,
+            `| **Release page** | [${tag}](${releaseUrl}) |`,
             '',
             '**To install:**',
-            '1. Click the download link above',
+            '1. Click the download link above (the `.dmg` is served raw — not wrapped in a zip)',
             '2. Open the `.dmg`, drag **TempoStatusBarApp** to Applications',
             '',
-            '> This comment is updated automatically on each push to this PR.',
+            '> The pre-release is updated on every push and removed when the PR closes.',
           ].join('\n');
 
           const allComments = await github.paginate(github.rest.issues.listComments, {

@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
 permissions:
   security-events: write
-  actions: read
   contents: write
 
 concurrency:
@@ -78,7 +77,26 @@ jobs:
           -destination 'platform=macOS' \
           archive \
           -archivePath ./build/TempoStatusBarApp.xcarchive
-          
+
+    - name: Verify code signature
+      run: |
+        APP_PATH="./build/TempoStatusBarApp.xcarchive/Products/Applications/TempoStatusBarApp.app"
+
+        echo "=== codesign --display --verbose=4 ==="
+        codesign --display --verbose=4 "$APP_PATH"
+
+        echo "=== Designated requirement ==="
+        codesign --display --requirements - "$APP_PATH"
+
+        echo "=== codesign --verify --deep --strict ==="
+        codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+        echo "=== Identity must be 'TempoStatusBar Signing' ==="
+        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=TempoStatusBar Signing' \
+          || { echo "❌ Expected Authority=TempoStatusBar Signing not found"; exit 1; }
+
+        echo "✅ Code signature verified"
+
     - name: Create DMG
       run: |
         # Create a simple DMG structure
@@ -88,12 +106,6 @@ jobs:
         # Create DMG (requires hdiutil)
         hdiutil create -volname "TempoStatusBarApp" -srcfolder ./dmg -ov -format UDZO TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
         
-    - name: Upload DMG artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: TempoStatusBarApp-${{ steps.version.outputs.version }}
-        path: TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
-
     - name: Upload DMG to release
       if: github.event_name == 'release' && github.event.action == 'created'
       uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
