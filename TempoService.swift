@@ -143,9 +143,9 @@ class WorklogStateManager: ObservableObject {
 extension WorklogStateManager {
     var statusEmoji: String {
         guard let days = daysSinceLastWorklog else { return "" }
-        if days <= warningThreshold {
+        if days < warningThreshold {
             return "✅"
-        } else if days <= warningThreshold + 1 {
+        } else if days == warningThreshold {
             return "⏰"
         } else {
             return "🚨"

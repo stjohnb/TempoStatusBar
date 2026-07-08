@@ -1,8 +1,9 @@
 {
-  "sourceSha": "a4e40f3062702df5f13ebd17bf4e6dc27af284f6",
+  "sourceSha": "7596f327a6ede85c8730c2d6d7de0e662332a7fa",
   "publishedReleases": {
     "v1.3.1": "preexisting",
     "v1.0.0": "c341305e97f20190c208908f758b9caac8162afa",
-    "v1.0.1": "6a883d9fec7f70982448e5fb1daa103d1cfd79b6"
+    "v1.0.1": "6a883d9fec7f70982448e5fb1daa103d1cfd79b6",
+    "v1.0.2": "273e7c31da1ebc2f8a8c204107017a58009a74b7"
   }
 }
