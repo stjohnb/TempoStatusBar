@@ -1,5 +1,3 @@
-A public snapshot of a personal, self-hosted project — this mirrors a private repository automatically, so some details may reference the author's own infrastructure or Jira instance rather than a generic setup.
-
 # TempoStatusBarApp
 
 This is a macOS menu bar app that shows how many days have passed since your last Jira Tempo worklog submission.

@@ -82,17 +82,14 @@ The project uses several GitHub Actions workflows:
 - Verifies build and code quality
 - Includes SwiftLint checks
 - Performs security scanning with Trivy
-- Builds and code-signs a DMG, then publishes it to a per-PR GitHub pre-release tagged `pr-<NUMBER>`. The DMG is delivered as a raw `.dmg` (not zipped), which keeps its `com.apple.quarantine` origin consistent with tagged-release downloads and avoids macOS Keychain re-prompts.
-- **Automatically posts a comment** on the PR with a direct download link to the DMG. The comment is updated on each subsequent push, so there is always a single comment pointing to the latest build.
-- The pre-release is automatically deleted when the PR closes (merged or not).
-- Fork PRs skip the publish/comment steps because their workflow token is read-only; contributors from forks should rebase their branch onto the upstream repo or build locally to test.
+- Creates DMG artifacts for testing
 
 ### Release Verification
 - Runs on pushes to main branch and manual dispatch
 - Builds release artifacts
 - Security scanning with Trivy
 - Documentation validation
-- Builds a DMG to verify packaging; on a tagged release event, attaches it to the GitHub Release page (no Actions artifact upload)
+- Creates DMG distribution files
 
 ## Release Process
 

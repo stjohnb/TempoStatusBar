@@ -1,18 +1,10 @@
 import Cocoa
 import SwiftUI
-import Combine
-import OSLog
 
-@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusBarItem: NSStatusItem!
     var popover: NSPopover!
-    var settingsPopover: NSPopover!
-    private let stateManager = WorklogStateManager.shared
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "TempoStatusBar", category: "AppDelegate")
-    private var credentialObserver: NSObjectProtocol?
-    private var cancellables = Set<AnyCancellable>()
-    private var updateCheckTimer: Timer?
+    var timer: Timer?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Add minimal main menu with Edit > Paste
@@ -38,10 +30,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
 
         setupStatusBar()
-        setupStateObserver()
+        setupTimer()
         setupCredentialObserver()
-        Task { await self.runAutomaticUpdateCheck() }
-        scheduleAutomaticUpdateChecks()
     }
     
     func setupStatusBar() {
@@ -60,18 +50,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(statusItem)
         
         menu.addItem(NSMenuItem.separator())
-
-        // About option
-        let aboutItem = NSMenuItem(title: "About TempoStatusBar", action: #selector(showAbout), keyEquivalent: "")
-        aboutItem.target = self
-        menu.addItem(aboutItem)
-
-        let updatesItem = NSMenuItem(title: "Check for Updates\u{2026}", action: #selector(checkForUpdatesManually), keyEquivalent: "")
-        updatesItem.target = self
-        menu.addItem(updatesItem)
-
-        menu.addItem(NSMenuItem.separator())
-
+        
         // Settings option - shows settings view
         let settingsItem = NSMenuItem(title: "Settings", action: #selector(showSettings), keyEquivalent: "")
         settingsItem.target = self
@@ -88,47 +67,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusBarItem.menu = menu
         
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 350, height: 280)
+        popover.contentSize = NSSize(width: 300, height: 200)
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: ContentView())
-
-        settingsPopover = NSPopover()
-        settingsPopover.contentSize = NSSize(width: 400, height: 640)
-        settingsPopover.behavior = .applicationDefined
-        settingsPopover.contentViewController = NSHostingController(rootView: SettingsView())
     }
     
-    func setupStateObserver() {
-        Publishers.Merge3(
-            stateManager.$daysSinceLastWorklog.map { _ in () },
-            stateManager.$lastError.map { _ in () },
-            stateManager.$hasCredentials.map { _ in () }
-        )
-        .sink { [weak self] in self?.updateStatusBarDisplay() }
-        .store(in: &cancellables)
+    func setupTimer() {
+        timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
+            self.updateStatusBar()
+        }
+        
+        // Add a small delay for the initial update to ensure app is fully initialized
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            self.updateStatusBar()
+        }
     }
     
     func setupCredentialObserver() {
         // Listen for credential changes and update status bar immediately
-        credentialObserver = NotificationCenter.default.addObserver(
+        NotificationCenter.default.addObserver(
             forName: .credentialsChanged,
             object: nil,
             queue: .main
         ) { _ in
-            self.logger.debug("Credentials changed, updating status bar")
-            Task { @MainActor in
-                self.stateManager.checkCredentialsAndRefresh()
-            }
+            print("Debug: AppDelegate - Credentials changed, updating status bar...")
+            self.updateStatusBar()
         }
     }
     
-    deinit {
-        // Remove the credential observer to prevent memory leaks
-        if let observer = credentialObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-        updateCheckTimer?.invalidate()
-    }
+
     
     @objc func showStatus() {
         if let button = statusBarItem.button {
@@ -142,119 +109,127 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc func showSettings() {
         if let button = statusBarItem.button {
-            if settingsPopover.isShown {
-                settingsPopover.performClose(nil)
-            } else {
-                settingsPopover.show(relativeTo: button.bounds, of: button, preferredEdge: NSRectEdge.minY)
+            // Create a settings popover
+            let settingsPopover = NSPopover()
+            settingsPopover.contentSize = NSSize(width: 400, height: 500)
+            settingsPopover.behavior = .applicationDefined
+            settingsPopover.contentViewController = NSHostingController(rootView: SettingsView())
+            
+            // Add a notification observer to refresh status bar when popover closes
+            NotificationCenter.default.addObserver(
+                forName: NSPopover.didCloseNotification,
+                object: settingsPopover,
+                queue: .main
+            ) { _ in
+                // Refresh the status bar when settings popover is closed
+                self.updateStatusBar()
+                // Remove the observer to avoid memory leaks
+                NotificationCenter.default.removeObserver(self, name: NSPopover.didCloseNotification, object: settingsPopover)
             }
+            
+            settingsPopover.show(relativeTo: button.bounds, of: button, preferredEdge: NSRectEdge.minY)
         }
     }
     
-    @objc func showAbout() {
-        presentAlert(
-            messageText: "TempoStatusBar",
-            informativeText: "Version \(appVersion)\n\nA macOS menu bar app for monitoring Jira Tempo worklogs."
-        )
-    }
-
     @objc func quitApp() {
         NSApplication.shared.terminate(nil)
     }
     
-    private func scheduleAutomaticUpdateChecks() {
-        updateCheckTimer = Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { _ in
-            Task { @MainActor in await self.runAutomaticUpdateCheck() }
-        }
-    }
-
-    @objc private func checkForUpdatesManually() {
-        Task { await self.performUpdateCheck(showUpToDateAlert: true, respectSkippedVersion: false) }
-    }
-
-    private func runAutomaticUpdateCheck() async {
-        await performUpdateCheck(showUpToDateAlert: false, respectSkippedVersion: true)
-    }
-
-    private func performUpdateCheck(showUpToDateAlert: Bool, respectSkippedVersion: Bool) async {
-        let result = await UpdateChecker.shared.checkForUpdates()
-        switch result {
-        case .upToDate(let current):
-            if showUpToDateAlert { presentAlert(messageText: "TempoStatusBar is up to date.", informativeText: "Version \(current)") }
-        case .updateAvailable(let current, let latest, let releaseURL):
-            if respectSkippedVersion && UpdateChecker.shared.skippedVersion == latest { return }
-            presentUpdateAvailableAlert(current: current, latest: latest, releaseURL: releaseURL)
-        case .skipped(let reason):
-            if showUpToDateAlert { presentAlert(messageText: "Could not check for updates.", informativeText: reason) }
-        case .failed(let error):
-            if showUpToDateAlert { presentAlert(messageText: "Update check failed.", informativeText: error.localizedDescription, alertStyle: .warning) }
-        }
-    }
-
-    private func presentUpdateAvailableAlert(current: String, latest: String, releaseURL: URL) {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = "Update available"
-        alert.informativeText = "Version \(latest) is available. You're currently running \(current)."
-        alert.addButton(withTitle: "Download Update")
-        alert.addButton(withTitle: "Skip This Version")
-        alert.addButton(withTitle: "Remind Me Later")
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            NSWorkspace.shared.open(releaseURL)
-        case .alertSecondButtonReturn:
-            UpdateChecker.shared.skippedVersion = latest
-        default:
-            break
-        }
-    }
-
-    private func presentAlert(messageText: String, informativeText: String, alertStyle: NSAlert.Style = .informational) {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.alertStyle = alertStyle
-        alert.messageText = messageText
-        alert.informativeText = informativeText
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
-
-    private func updateStatusBarDisplay() {
-        guard let button = statusBarItem.button else { return }
-
-        if let error = stateManager.lastError {
-            // Handle error state
-            button.title = "❌"
-
-            if !stateManager.hasCredentials {
-                button.toolTip = "No credentials configured. Click to open settings and configure your Tempo credentials."
-            } else {
-                switch error {
-                case .tempo(.unauthorized):
-                    button.toolTip = "API token invalid. Click to open settings and check your credentials."
-                case .tempo(.forbidden):
-                    button.toolTip = "Access forbidden. Check your account permissions."
-                case .tempo(.apiError(statusCode: 404)), .tempo(.missingCredentials):
-                    button.toolTip = "Account not found. Click to open settings and check your Account ID."
-                case .tempo(.networkError):
-                    button.toolTip = "Network error. Check your internet connection."
-                default:
-                    button.toolTip = "Error: \(error.displayMessage)"
+    func updateStatusBar() {
+        Task {
+            do {
+                print("Debug: AppDelegate - Loading credentials...")
+                let credentials = try CredentialManager.shared.loadCredentials()
+                print("Debug: AppDelegate - Credentials loaded successfully")
+                
+                print("Debug: AppDelegate - Fetching days since last worklog...")
+                let days = await TempoService.shared.getDaysSinceLastWorklog(
+                    apiToken: credentials.apiToken,
+                    jiraURL: credentials.jiraURL,
+                    accountId: credentials.accountId.isEmpty ? nil : credentials.accountId
+                )
+                print("Debug: AppDelegate - Days since last worklog: \(days?.description ?? "nil")")
+                
+                await MainActor.run {
+                    updateStatusBarDisplay(days: days, warningThreshold: credentials.warningThreshold)
+                }
+            } catch {
+                print("Debug: AppDelegate - Error in updateStatusBar: \(error)")
+                await MainActor.run {
+                    updateStatusBarDisplay(error: error)
                 }
             }
-        } else {
-            // Handle normal state
-            button.title = stateManager.statusBarTitle
+        }
+    }
+    
+    private func updateStatusBarDisplay(days: Int?, warningThreshold: Int) {
+        guard let button = statusBarItem.button else { return }
+        
+        print("Debug: AppDelegate - updateStatusBarDisplay called with days: \(days?.description ?? "nil"), warningThreshold: \(warningThreshold)")
+        
+        if let days = days {
+            let emoji: String
+            let color: NSColor
             
-            if stateManager.daysSinceLastWorklog != nil {
-                button.attributedTitle = NSAttributedString(
-                    string: stateManager.statusBarTitle,
-                    attributes: [.foregroundColor: stateManager.statusBarColor]
-                )
+            if days <= warningThreshold {
+                emoji = "✅"
+                color = .systemGreen
+            } else if days <= warningThreshold + 1 {
+                emoji = "⏰"
+                color = .systemOrange
+            } else {
+                emoji = "🚨"
+                color = .systemRed
             }
             
-            button.toolTip = stateManager.statusBarTooltip
+            button.title = "\(emoji) \(days)"
+            button.attributedTitle = NSAttributedString(
+                string: "\(emoji) \(days)",
+                attributes: [.foregroundColor: color]
+            )
+            button.toolTip = "Last worklog: \(days) day\(days == 1 ? "" : "s") ago"
+            print("Debug: AppDelegate - Set status bar to: \(emoji) \(days)")
+        } else {
+            button.title = "⏱️"
+            button.toolTip = "No worklog data available"
+            print("Debug: AppDelegate - Set status bar to: ⏱️ (no data)")
         }
+    }
+    
+    private func updateStatusBarDisplay(error: Error) {
+        guard let button = statusBarItem.button else { return }
+        
+        print("Debug: AppDelegate - updateStatusBarDisplay error: \(error)")
+        
+        button.title = "❌"
+        
+        if let credentialError = error as? CredentialError {
+            switch credentialError {
+            case .noStoredCredentials:
+                button.toolTip = "No credentials configured. Click to open settings and configure your Tempo credentials."
+            case .decodingFailed:
+                button.toolTip = "Credential data corrupted. Click to open settings and re-enter your credentials."
+            }
+        } else if let tempoError = error as? TempoError {
+            switch tempoError {
+            case .unauthorized:
+                button.toolTip = "API token invalid. Click to open settings and check your credentials."
+            case .forbidden:
+                button.toolTip = "Access forbidden. Check your account permissions."
+            case .notFound:
+                button.toolTip = "Account not found. Click to open settings and check your Account ID."
+            case .networkError:
+                button.toolTip = "Network error. Check your internet connection."
+            case .apiError(let statusCode):
+                button.toolTip = "API error (HTTP \(statusCode)). Check your Jira URL and credentials."
+            default:
+                button.toolTip = "Tempo error: \(tempoError.localizedDescription)"
+            }
+        } else {
+            button.toolTip = "Error: \(error.localizedDescription)"
+        }
+        
+        print("Debug: AppDelegate - Set status bar to: ❌ with tooltip: \(button.toolTip ?? "nil")")
     }
 }
 

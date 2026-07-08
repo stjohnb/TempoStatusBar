@@ -6,139 +6,23 @@ on:
   workflow_dispatch:
 permissions:
   security-events: write
+  actions: read
   contents: read
-
-concurrency:
-  group: pr-verification-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build-and-test:
     name: Build and Test
-    runs-on: [self-hosted, macos, tempo]
-    # Only two Macs serve three repos — a wedged job must not hold one for hours.
-    timeout-minutes: 60
-    permissions:
-      contents: write
-      pull-requests: write
+    runs-on: macos-latest
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
       with:
-        fetch-depth: 0
-
-    - name: Select Xcode
-      # Shared convention for the two self-hosted Macs (used identically by
-      # TempoStatusBar, namey and bonkus): resolve the newest Xcode installed on
-      # whichever runner picked up the job and export a job-scoped DEVELOPER_DIR.
-      # Never use setup-xcode or xcode-select here — those change the *machine's*
-      # active Xcode (via sudo) for every other repo sharing the runner.
-      run: |
-        newest=""
-        newest_key=""
-        for app in /Applications/Xcode*.app; do
-          [ -d "$app" ] || continue
-          case "$app" in *[Bb]eta*) continue ;; esac
-          ver=$(/usr/bin/defaults read "$app/Contents/version" CFBundleShortVersionString 2>/dev/null || echo 0)
-          key=$(echo "$ver" | awk -F. '{printf "%03d%03d%03d", $1, $2, $3}')
-          if [ -z "$newest" ] || [ "$key" \> "$newest_key" ]; then
-            newest="$app"; newest_key="$key"
-          fi
-        done
-        if [ -z "$newest" ]; then
-          echo "::error::No Xcode found under /Applications on runner $(hostname)"
-          exit 1
-        fi
-        echo "DEVELOPER_DIR=$newest/Contents/Developer" >> "$GITHUB_ENV"
-        DEVELOPER_DIR="$newest/Contents/Developer" xcodebuild -version
-
-    - name: Generate version from PR and SHA
-      id: version
-      run: |
-        git fetch --tags
-        LATEST_TAG=$(git tag -l | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
-        if [ -z "$LATEST_TAG" ]; then LATEST_TAG="0.0.0"; fi
-        VERSION="${LATEST_TAG}-pr-${{ github.event.number }}-$(git rev-parse --short HEAD)"
-        echo "version=${VERSION}" >> $GITHUB_OUTPUT
-
-    - name: Import signing certificate
-      env:
-        SIGNING_CERT_P12_BASE64: ${{ secrets.SIGNING_CERT_P12_BASE64 }}
-        SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
-        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-      run: |
-        CERT_PATH="$RUNNER_TEMP/signing.p12"
-        KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
-
-        echo "$SIGNING_CERT_P12_BASE64" | base64 --decode -o "$CERT_PATH"
-
-        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-        # Import the signing identity (cert + private key). Omit -t so pkcs12
-        # aggregate items (cert and key) are both imported.
-        security import "$CERT_PATH" -P "$SIGNING_CERT_PASSWORD" -A -f pkcs12 -k "$KEYCHAIN_PATH"
-
-        # Import the full Apple chain the leaf Developer ID cert may need: both
-        # "Developer ID Certification Authority" intermediates (G1 and G2 — the
-        # .p12 holds only the leaf + key, which may be issued by either) and both
-        # Apple roots (classic and G2 — the G2 intermediate chains to the G2
-        # root). GitHub-hosted images preinstall these in the system
-        # keychain; the shared self-hosted Macs do not, and codesign fails with
-        # "unable to build chain to self-signed root" / errSecInternalComponent
-        # when any link is missing (#133).
-        for CERT_URL in \
-          https://www.apple.com/certificateauthority/DeveloperIDCA.cer \
-          https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer \
-          https://www.apple.com/appleca/AppleIncRootCertificate.cer \
-          https://www.apple.com/certificateauthority/AppleRootCA-G2.cer; do
-          CHAIN_CER="$RUNNER_TEMP/$(basename "$CERT_URL")"
-          curl -fsSL -o "$CHAIN_CER" "$CERT_URL"
-          # `|| true`: re-importing an already-present cert exits non-zero, which
-          # would abort this `bash -e` step; the cert being present is fine.
-          security import "$CHAIN_CER" -t cert -k "$KEYCHAIN_PATH" || true
-          rm -f "$CHAIN_CER"
-        done
-
-        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
-
-        # Make the temp keychain the ONLY user keychain in the search list for
-        # the duration of the job (restored in the always() cleanup step). Two
-        # reasons, both from the shared self-hosted Macs being real machines
-        # with real login keychains:
-        #   1. The unit tests exercise the real Keychain under the production
-        #      service name — with the login keychain searchable they collide
-        #      with (and could delete) genuine stored credentials, and hang on
-        #      headless authorization prompts.
-        #   2. codesign builds its chain across every searchable keychain; a
-        #      duplicate/differently-trusted copy of the Developer ID certs in
-        #      the login keychain can poison chain building ("unable to build
-        #      chain to self-signed root").
-        security list-keychains -d user -s "$KEYCHAIN_PATH"
-
-        # Also make it the default keychain: on the self-hosted Macs the runner
-        # user has no GUI session, and codesign fails with errSecInternalComponent
-        # when the signing keychain is only in the search list. Restored to the
-        # login keychain in the always() cleanup step.
-        security default-keychain -d user -s "$KEYCHAIN_PATH"
-
-        rm "$CERT_PATH"
-
-        # Verify the identity is available for codesigning (no -v: self-signed certs
-        # aren't "trusted" by the system, but codesign can still use them for signing)
-        security find-identity -p codesigning "$KEYCHAIN_PATH"
-
-        # Diagnostics for chain-building failures on the self-hosted Macs: show
-        # the leaf's issuer and let the trust evaluator name the failing link.
-        # Non-fatal — the build step below is the real gate.
-        LEAF_PEM="$RUNNER_TEMP/leaf.pem"
-        security find-certificate -c "Developer ID Application" -p "$KEYCHAIN_PATH" > "$LEAF_PEM" || true
-        openssl x509 -in "$LEAF_PEM" -noout -subject -issuer -dates || true
-        security verify-cert -c "$LEAF_PEM" -p codeSign || echo "verify-cert failed (see above for the failing link)"
-        rm -f "$LEAF_PEM"
-
+        xcode-version: '15.0'
+        
     - name: Build project
       run: |
         xcodebuild -project TempoStatusBarApp.xcodeproj \
@@ -146,68 +30,26 @@ jobs:
           -configuration Debug \
           -destination 'platform=macOS' \
           build
-
+          
     - name: Build for release
-      env:
-        DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
       run: |
         xcodebuild -project TempoStatusBarApp.xcodeproj \
           -scheme TempoStatusBarApp \
           -configuration Release \
           -destination 'platform=macOS' \
-          DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-          MARKETING_VERSION="${{ steps.version.outputs.version }}" \
           build
 
-    - name: Run unit tests
-      env:
-        # Skip the real-keychain CredentialManager tests: on the shared
-        # self-hosted Macs the runner user's login keychain holds genuine
-        # credentials under the production service name, and headless keychain
-        # access blocks on authorization dialogs (see PR #165). xcodebuild only
-        # forwards env vars prefixed TEST_RUNNER_ into the test-host process
-        # (prefix stripped), so the tests see TEMPO_SKIP_KEYCHAIN_TESTS=1.
-        TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS: "1"
-      run: |
-        echo "🧪 Running unit tests using local test script..."
-        chmod +x ./run_tests.sh
-        ./run_tests.sh
-        
-        echo "✅ Unit tests completed successfully"
-
-    - name: Upload test results
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: test-results
-        path: test-results.xcresult
-        retention-days: 3
-
-    - name: Test summary
-      if: always()
-      run: |
-        echo "📊 Test Summary:"
-        echo "=================="
-        if [ -d "test-results.xcresult" ]; then
-          echo "✅ Test results generated successfully"
-          echo "📁 Test results saved as artifact: test-results"
-          echo "🔍 View test results in the Actions tab"
-        else
-          echo "⚠️  No test results found"
-        fi
-
     - name: Build and archive
-      env:
-        DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
       run: |
         echo "Running integration tests..."
+        # Since this app doesn't have explicit tests yet,
+        # we'll do basic integration checks
+        
         # Check if the app can be built and archived
         xcodebuild -project TempoStatusBarApp.xcodeproj \
           -scheme TempoStatusBarApp \
           -configuration Release \
           -destination 'platform=macOS' \
-          DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-          MARKETING_VERSION="${{ steps.version.outputs.version }}" \
           archive \
           -archivePath ./build/TempoStatusBarApp.xcarchive
           
@@ -221,239 +63,53 @@ jobs:
         else
           echo "❌ App bundle structure is incorrect"
           exit 1
-        fi
-
-    - name: Verify code signature
+        fi 
+        
+    - name: Generate version from PR and SHA
+      id: version
       run: |
-        APP_PATH="./build/TempoStatusBarApp.xcarchive/Products/Applications/TempoStatusBarApp.app"
-
-        echo "=== codesign --display --verbose=4 ==="
-        codesign --display --verbose=4 "$APP_PATH"
-
-        echo "=== Designated requirement ==="
-        codesign --display --requirements - "$APP_PATH"
-
-        echo "=== codesign --verify --deep --strict ==="
-        codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-
-        echo "=== Identity must be a Developer ID Application cert ==="
-        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=Developer ID Application:' \
-          || { echo "❌ Expected Authority=Developer ID Application: not found"; exit 1; }
-
-        echo "=== Hardened Runtime must be enabled ==="
-        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'flags=.*runtime' \
-          || { echo "❌ Hardened Runtime flag not present in signature"; exit 1; }
-
-        echo "✅ Code signature verified (Developer ID + Hardened Runtime)"
-
+        echo "version=pr-${{ github.event.number }}-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+                  
     - name: Create DMG
       run: |
-        set -euo pipefail
-        DMG_NAME="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
-
-        # Fresh staging directory each run.
-        rm -rf ./dmg
-        mkdir -p ./dmg
+        # Create a simple DMG structure
+        mkdir -p ./dmg/TempoStatusBarApp.app
         cp -R ./build/TempoStatusBarApp.xcarchive/Products/Applications/TempoStatusBarApp.app ./dmg/
-
-        hdiutil create -volname "TempoStatusBarApp" -srcfolder ./dmg -ov -format UDZO "$DMG_NAME"
-
-        echo "Created $DMG_NAME"
-
-    - name: Sign DMG
-      if: github.event.pull_request.head.repo.full_name == github.repository
-      run: |
-        DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
-
-        # Find the Developer ID Application identity in the temp keychain
-        IDENTITY=$(security find-identity -p codesigning "$RUNNER_TEMP/build.keychain-db" \
-          | grep 'Developer ID Application' \
-          | head -1 \
-          | awk -F'"' '{print $2}')
-
-        if [ -z "$IDENTITY" ]; then
-          echo "❌ Could not locate Developer ID Application identity for DMG signing"
-          exit 1
-        fi
-
-        echo "Signing DMG with: $IDENTITY"
-        codesign --sign "$IDENTITY" --timestamp "$DMG"
-        codesign --verify --verbose=2 "$DMG"
-
-    - name: Notarize DMG
-      if: github.event.pull_request.head.repo.full_name == github.repository
-      env:
-        AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
-        AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
-        AC_API_KEY_P8_BASE64: ${{ secrets.AC_API_KEY_P8_BASE64 }}
-      run: |
-        DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
-        KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
-
-        echo "$AC_API_KEY_P8_BASE64" | base64 --decode -o "$KEY_PATH"
-
-        # Submit and wait. notarytool exits non-zero if submission upload fails,
-        # but exits 0 even when the notarization status is "Invalid" — we re-check
-        # below by stapling, which only succeeds for accepted submissions.
-        xcrun notarytool submit "$DMG" \
-          --key "$KEY_PATH" \
-          --key-id "$AC_API_KEY_ID" \
-          --issuer "$AC_API_ISSUER_ID" \
-          --wait \
-          --timeout 30m
-
-        rm "$KEY_PATH"
-
-    - name: Staple notarization ticket
-      if: github.event.pull_request.head.repo.full_name == github.repository
-      run: |
-        DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
-        xcrun stapler staple "$DMG"
-        xcrun stapler validate "$DMG"
-
-        # Final Gatekeeper assessment as an end-user would experience it
-        spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
-
-    - name: Delete previous PR pre-release (if any)
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        gh release delete "pr-${{ github.event.number }}" \
-          --yes --cleanup-tag \
-          --repo "${{ github.repository }}" 2>/dev/null || true
-
-    - name: Publish DMG to PR pre-release
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-      uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
+        
+        # Create DMG (requires hdiutil)
+        hdiutil create -volname "TempoStatusBarApp" -srcfolder ./dmg -ov -format UDZO TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
+        
+    - name: Upload DMG artifact
+      uses: actions/upload-artifact@v4
       with:
-        tag_name: pr-${{ github.event.number }}
-        name: PR #${{ github.event.number }} build (${{ steps.version.outputs.version }})
-        prerelease: true
-        make_latest: 'false'
-        target_commitish: ${{ github.event.pull_request.head.sha }}
-        files: TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
-        body: |
-          Auto-generated build for PR #${{ github.event.number }}.
-
-          Commit: ${{ github.event.pull_request.head.sha }}
-          Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          This pre-release is automatically deleted when the PR closes.
-
-    - name: Comment PR with build artifact link
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-      continue-on-error: true
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const tag = `pr-${{ github.event.number }}`;
-          const version = `${{ steps.version.outputs.version }}`;
-          const dmgName = `TempoStatusBarApp-${version}.dmg`;
-          const releaseUrl = `${{ github.server_url }}/${{ github.repository }}/releases/tag/${tag}`;
-          const downloadUrl = `${{ github.server_url }}/${{ github.repository }}/releases/download/${tag}/${dmgName}`;
-          const marker = '<!-- pr-build-comment -->';
-
-          const body = [
-            marker,
-            '## PR Build Available',
-            '',
-            'A signed and notarized macOS DMG for this PR is published as a pre-release.',
-            '',
-            '| | |',
-            '|---|---|',
-            `| **Version** | \`${version}\` |`,
-            `| **Download** | [${dmgName}](${downloadUrl}) |`,
-            `| **Release page** | [${tag}](${releaseUrl}) |`,
-            '',
-            '**To install:**',
-            '1. Click the download link above (the `.dmg` is served raw — not wrapped in a zip)',
-            '2. Open the `.dmg`, drag **TempoStatusBarApp** to Applications',
-            '',
-            '> The pre-release is updated on every push and removed when the PR closes.',
-          ].join('\n');
-
-          const allComments = await github.paginate(github.rest.issues.listComments, {
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number,
-          });
-          const existing = allComments.find(c => c.body.includes(marker));
-
-          if (existing) {
-            await github.rest.issues.updateComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: existing.id,
-              body,
-            });
-          } else {
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body,
-            });
-          }
-
-    - name: Clean up signing keychain
-      if: always()
-      run: |
-        KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
-        security list-keychains -d user -s login.keychain-db 2>/dev/null || true
-        security default-keychain -d user -s login.keychain-db 2>/dev/null || true
-        security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
-        rm -f "$RUNNER_TEMP/AuthKey.p8"
-
+        name: TempoStatusBarApp-${{ steps.version.outputs.version }}
+        path: TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
+        retention-days: 7
+        
   code-quality:
     name: Code Quality
-    runs-on: [self-hosted, macos, tempo]
-    # Only two Macs serve three repos — a wedged job must not hold one for hours.
-    timeout-minutes: 15
-
+    runs-on: macos-latest
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
-    - name: Select Xcode
-      # Shared convention for the two self-hosted Macs (used identically by
-      # TempoStatusBar, namey and bonkus): resolve the newest Xcode installed on
-      # whichever runner picked up the job and export a job-scoped DEVELOPER_DIR.
-      # Never use setup-xcode or xcode-select here — those change the *machine's*
-      # active Xcode (via sudo) for every other repo sharing the runner.
-      run: |
-        newest=""
-        newest_key=""
-        for app in /Applications/Xcode*.app; do
-          [ -d "$app" ] || continue
-          case "$app" in *[Bb]eta*) continue ;; esac
-          ver=$(/usr/bin/defaults read "$app/Contents/version" CFBundleShortVersionString 2>/dev/null || echo 0)
-          key=$(echo "$ver" | awk -F. '{printf "%03d%03d%03d", $1, $2, $3}')
-          if [ -z "$newest" ] || [ "$key" \> "$newest_key" ]; then
-            newest="$app"; newest_key="$key"
-          fi
-        done
-        if [ -z "$newest" ]; then
-          echo "::error::No Xcode found under /Applications on runner $(hostname)"
-          exit 1
-        fi
-        echo "DEVELOPER_DIR=$newest/Contents/Developer" >> "$GITHUB_ENV"
-        DEVELOPER_DIR="$newest/Contents/Developer" xcodebuild -version
-
+      
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: '15.0'
+        
     - name: Install SwiftLint
       run: |
-        # Self-hosted runners keep SwiftLint installed between runs; only install
-        # when missing. A bare `brew install` would try to upgrade an existing
-        # copy and fail on runners where the Homebrew prefix isn't user-writable.
-        command -v swiftlint || brew install swiftlint
-
+        brew install swiftlint
+        
     - name: Run SwiftLint
       run: |
         swiftlint lint --reporter github-actions-logging
         
   security-scan:
     name: Security Scan
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     
     steps:
     - name: Checkout code
@@ -466,7 +122,6 @@ jobs:
         scan-ref: '.'
         format: 'sarif'
         output: 'trivy-results.sarif'
-        cache: 'false'
         
     - name: Upload Trivy scan results to GitHub Security tab
       uses: github/codeql-action/upload-sarif@v3

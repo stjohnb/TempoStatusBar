@@ -1,5 +1,4 @@
 import SwiftUI
-import OSLog
 
 struct MacOSTextField: View {
     let placeholder: String
@@ -22,24 +21,23 @@ struct MacOSTextField: View {
         }
         .textFieldStyle(.roundedBorder)
         .textSelection(.enabled)
+        .focused($focusedField)
     }
+    
+    @FocusState private var focusedField: Bool
 }
 
 struct SettingsView: View {
-    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "TempoStatusBar", category: "SettingsView")
     @State private var apiToken = ""
     @State private var accountId = ""
     @State private var jiraURL = ""
     @State private var warningThreshold = 7
-    @State private var launchAtLogin: Bool = LaunchAtLoginManager.shared.isEnabled
-    @State private var launchAtLoginError: String?
     @State private var isTestingConnection = false
     @State private var isDetectingUser = false
     @State private var testResult: String?
     @State private var detectedUserInfo: String?
     @State private var saveResult: String?
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject private var stateManager = WorklogStateManager.shared
     
     var body: some View {
         VStack(spacing: 20) {
@@ -81,7 +79,7 @@ struct SettingsView: View {
                 if let userInfo = detectedUserInfo {
                     Text(userInfo)
                         .font(.caption)
-                        .foregroundColor(userInfo.hasPrefix("❌") ? .red : .green)
+                        .foregroundColor(.green)
                 }
                 
                 Text("Account ID (username) is optional - the app can auto-detect it from your API token. This should be your Jira username (e.g., 'bstjohn'), not the internal user ID.")
@@ -105,7 +103,7 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
-
+            
             if isDetectingUser {
                 HStack {
                     ProgressView()
@@ -129,7 +127,7 @@ struct SettingsView: View {
             if let result = testResult {
                 Text(result)
                     .font(.caption)
-                    .foregroundColor(result.contains("✅") ? .green : result.contains("⚠️") ? .orange : .red)
+                    .foregroundColor(result.contains("✅") ? .green : .red)
                     .multilineTextAlignment(.center)
             }
             
@@ -161,40 +159,7 @@ struct SettingsView: View {
                 .buttonStyle(.bordered)
             }
             
-            VStack(alignment: .leading, spacing: 8) {
-                Text("App Settings")
-                    .font(.headline)
-                if #available(macOS 13.0, *) {
-                    Toggle("Launch at Login", isOn: Binding(
-                        get: { launchAtLogin },
-                        set: { newValue in
-                            do {
-                                try LaunchAtLoginManager.shared.setEnabled(newValue)
-                                launchAtLogin = newValue
-                                launchAtLoginError = nil
-                            } catch {
-                                launchAtLogin = !newValue
-                                launchAtLoginError = error.localizedDescription
-                            }
-                        }
-                    ))
-                    if let error = launchAtLoginError {
-                        Text(error)
-                            .foregroundColor(.red)
-                            .font(.caption)
-                    }
-                } else {
-                    HStack {
-                        Text("Launch at Login")
-                        Spacer()
-                        Text("Requires macOS 13 or later")
-                            .foregroundColor(.secondary)
-                            .font(.caption)
-                    }
-                }
-            }
-
-            if stateManager.hasCredentials {
+            if CredentialManager.shared.hasStoredCredentials() {
                 Button("Clear Stored Credentials") {
                     clearStoredCredentials()
                 }
@@ -203,10 +168,9 @@ struct SettingsView: View {
             }
         }
         .padding()
-        .frame(width: 400, height: 640)
+        .frame(width: 400, height: 500)
         .onAppear {
             loadStoredCredentials()
-            launchAtLogin = LaunchAtLoginManager.shared.isEnabled
         }
         .background(Color(NSColor.controlBackgroundColor))
     }
@@ -220,23 +184,11 @@ struct SettingsView: View {
             warningThreshold = credentials.warningThreshold
         } catch {
             // No stored credentials or error loading them - this is normal for first-time users
-            logger.info("No stored credentials found: \(error.localizedDescription)")
+            print("No stored credentials found: \(error.localizedDescription)")
         }
     }
     
-    @discardableResult
-    private func trimFields() -> Bool {
-        apiToken = apiToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        accountId = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
-        jiraURL = jiraURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !apiToken.isEmpty && !jiraURL.isEmpty
-    }
-
     private func saveCredentials() {
-        guard trimFields() else {
-            saveResult = "❌ API token and Jira URL cannot be empty"
-            return
-        }
         do {
             try CredentialManager.shared.saveCredentials(
                 apiToken: apiToken,
@@ -260,31 +212,29 @@ struct SettingsView: View {
         apiToken = ""
         accountId = ""
         jiraURL = ""
-        warningThreshold = 7
+                    warningThreshold = 7
         saveResult = "✅ Stored credentials cleared"
     }
     
     private func detectUserInfo() {
-        guard trimFields() else {
-            detectedUserInfo = "❌ API token and Jira URL cannot be empty"
-            return
-        }
+        guard !apiToken.isEmpty && !jiraURL.isEmpty else { return }
+        
         isDetectingUser = true
         detectedUserInfo = nil
-
+        
         Task {
             do {
-                let userInfo = try await TempoService.shared.fetchUserInfo(
-                    apiToken: apiToken,
-                    jiraURL: jiraURL
-                )
+                let userInfo = try await TempoService.shared.fetchUserInfo(apiToken: apiToken, jiraURL: jiraURL)
                 await MainActor.run {
                     isDetectingUser = false
                     if let user = userInfo {
                         var info = "Detected user info:\n"
+                        if let accountId = user.accountId {
+                            info += "• Account ID: \(accountId)\n"
+                            self.accountId = accountId
+                        }
                         if let name = user.name {
                             info += "• Username: \(name)\n"
-                            self.accountId = name
                         }
                         if let key = user.key {
                             info += "• Key: \(key)\n"
@@ -294,62 +244,41 @@ struct SettingsView: View {
                         }
                         detectedUserInfo = info
                     } else {
-                        detectedUserInfo = "❌ Could not detect user information"
+                        detectedUserInfo = "Could not detect user information"
                     }
                 }
             } catch {
                 await MainActor.run {
                     isDetectingUser = false
-                    detectedUserInfo = "❌ Error detecting user: \(error.localizedDescription)"
+                    detectedUserInfo = "Error detecting user: \(error.localizedDescription)"
                 }
             }
         }
     }
     
     private func testConnection() async {
-        guard trimFields() else {
-            testResult = "❌ API token and Jira URL cannot be empty"
-            return
-        }
         isTestingConnection = true
         testResult = nil
-
-        testResult = await runConnectionTest(
-            apiToken: apiToken, accountId: accountId, jiraURL: jiraURL,
-            service: TempoService.shared
-        )
-        isTestingConnection = false
-    }
-}
-
-func runConnectionTest(
-    apiToken: String,
-    accountId: String,
-    jiraURL: String,
-    service: any TempoServiceProtocol
-) async -> String {
-    do {
-        if !accountId.isEmpty {
-            let userInfo = try await service.fetchUserInfo(apiToken: apiToken, jiraURL: jiraURL)
-            let resolvedName = userInfo?.name
-            let resolvedKey = userInfo?.key
-            // Only check for mismatch if the server returned at least one identity field;
-            // if both are nil the API gave us nothing to compare against, so let
-            // fetchLatestWorklog surface the real error (missingCredentials).
-            if resolvedName != nil || resolvedKey != nil {
-                if resolvedName?.lowercased() != accountId.lowercased() &&
-                   resolvedKey?.lowercased() != accountId.lowercased() {
-                    let resolved = resolvedName ?? resolvedKey ?? "unknown"
-                    return "⚠️ API token authenticated, but Account ID '\(accountId)' does not match your Jira user '\(resolved)'. Worklog access was not tested."
-                }
+        
+        do {
+            // Test the connection using the current form values
+            _ = try await TempoService.shared.testConnection(apiToken: apiToken, accountId: accountId, jiraURL: jiraURL)
+            await MainActor.run {
+                testResult = "✅ Connection successful! Your credentials are valid."
+            }
+        } catch let tempoError as TempoError {
+            await MainActor.run {
+                testResult = "❌ Connection failed: \(tempoError.localizedDescription)"
+            }
+        } catch {
+            await MainActor.run {
+                testResult = "❌ Connection failed: \(error.localizedDescription)"
             }
         }
-        _ = try await service.fetchLatestWorklog(apiToken: apiToken, jiraURL: jiraURL, accountId: accountId)
-        return "✅ Connection successful! Your credentials are valid."
-    } catch let tempoError as TempoError {
-        return "❌ Connection failed: \(tempoError.localizedDescription)"
-    } catch {
-        return "❌ Connection failed: \(error.localizedDescription)"
+        
+        await MainActor.run {
+            isTestingConnection = false
+        }
     }
 }
 
