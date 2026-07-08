@@ -35,8 +35,8 @@ jobs:
       id: version
       run: |
         git fetch --tags
-        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
-        LATEST_TAG="${LATEST_TAG#v}"
+        LATEST_TAG=$(git tag -l | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+        if [ -z "$LATEST_TAG" ]; then LATEST_TAG="0.0.0"; fi
         VERSION="${LATEST_TAG}-pr-${{ github.event.number }}-$(git rev-parse --short HEAD)"
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
@@ -76,11 +76,14 @@ jobs:
           build
 
     - name: Build for release
+      env:
+        DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
       run: |
         xcodebuild -project TempoStatusBarApp.xcodeproj \
           -scheme TempoStatusBarApp \
           -configuration Release \
           -destination 'platform=macOS' \
+          DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
           MARKETING_VERSION="${{ steps.version.outputs.version }}" \
           build
 
@@ -114,6 +117,8 @@ jobs:
         fi
 
     - name: Build and archive
+      env:
+        DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
       run: |
         echo "Running integration tests..."
         # Check if the app can be built and archived
@@ -121,6 +126,7 @@ jobs:
           -scheme TempoStatusBarApp \
           -configuration Release \
           -destination 'platform=macOS' \
+          DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
           MARKETING_VERSION="${{ steps.version.outputs.version }}" \
           archive \
           -archivePath ./build/TempoStatusBarApp.xcarchive
@@ -150,11 +156,15 @@ jobs:
         echo "=== codesign --verify --deep --strict ==="
         codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
-        echo "=== Identity must be 'TempoStatusBar Signing' ==="
-        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=TempoStatusBar Signing' \
-          || { echo "❌ Expected Authority=TempoStatusBar Signing not found"; exit 1; }
+        echo "=== Identity must be a Developer ID Application cert ==="
+        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=Developer ID Application:' \
+          || { echo "❌ Expected Authority=Developer ID Application: not found"; exit 1; }
 
-        echo "✅ Code signature verified"
+        echo "=== Hardened Runtime must be enabled ==="
+        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'flags=.*runtime' \
+          || { echo "❌ Hardened Runtime flag not present in signature"; exit 1; }
+
+        echo "✅ Code signature verified (Developer ID + Hardened Runtime)"
 
     - name: Create DMG
       run: |
@@ -165,6 +175,60 @@ jobs:
         # Create DMG (requires hdiutil)
         hdiutil create -volname "TempoStatusBarApp" -srcfolder ./dmg -ov -format UDZO TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
         
+    - name: Sign DMG
+      if: github.event.pull_request.head.repo.full_name == github.repository
+      run: |
+        DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
+
+        # Find the Developer ID Application identity in the temp keychain
+        IDENTITY=$(security find-identity -p codesigning "$RUNNER_TEMP/build.keychain-db" \
+          | grep 'Developer ID Application' \
+          | head -1 \
+          | awk -F'"' '{print $2}')
+
+        if [ -z "$IDENTITY" ]; then
+          echo "❌ Could not locate Developer ID Application identity for DMG signing"
+          exit 1
+        fi
+
+        echo "Signing DMG with: $IDENTITY"
+        codesign --sign "$IDENTITY" --timestamp "$DMG"
+        codesign --verify --verbose=2 "$DMG"
+
+    - name: Notarize DMG
+      if: github.event.pull_request.head.repo.full_name == github.repository
+      env:
+        AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+        AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+        AC_API_KEY_P8_BASE64: ${{ secrets.AC_API_KEY_P8_BASE64 }}
+      run: |
+        DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
+        KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+
+        echo "$AC_API_KEY_P8_BASE64" | base64 --decode -o "$KEY_PATH"
+
+        # Submit and wait. notarytool exits non-zero if submission upload fails,
+        # but exits 0 even when the notarization status is "Invalid" — we re-check
+        # below by stapling, which only succeeds for accepted submissions.
+        xcrun notarytool submit "$DMG" \
+          --key "$KEY_PATH" \
+          --key-id "$AC_API_KEY_ID" \
+          --issuer "$AC_API_ISSUER_ID" \
+          --wait \
+          --timeout 30m
+
+        rm "$KEY_PATH"
+
+    - name: Staple notarization ticket
+      if: github.event.pull_request.head.repo.full_name == github.repository
+      run: |
+        DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
+        xcrun stapler staple "$DMG"
+        xcrun stapler validate "$DMG"
+
+        # Final Gatekeeper assessment as an end-user would experience it
+        spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
+
     - name: Delete previous PR pre-release (if any)
       if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
       env:
@@ -209,7 +273,7 @@ jobs:
             marker,
             '## PR Build Available',
             '',
-            'A signed macOS DMG for this PR is published as a pre-release.',
+            'A signed and notarized macOS DMG for this PR is published as a pre-release.',
             '',
             '| | |',
             '|---|---|',
@@ -252,6 +316,7 @@ jobs:
       run: |
         KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
         security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+        rm -f "$RUNNER_TEMP/AuthKey.p8"
 
   code-quality:
     name: Code Quality

@@ -76,7 +76,7 @@ echo ""
 echo "📚 Additional Resources:"
 echo "   - SETUP_TESTS.md: Step-by-step test setup guide"
 echo "   - TESTING.md: Comprehensive testing documentation"
-echo "   - ARCHITECTURE_IMPROVEMENTS.md: Background on the architectural changes"
+echo "   - docs/OVERVIEW.md: Architecture and developer overview"
 echo ""
 
 # Check for test documentation

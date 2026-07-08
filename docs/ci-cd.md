@@ -2,7 +2,7 @@
 
 ## Workflow Files
 
-All workflows live in `.github/workflows/`. Three workflows cover the full development lifecycle.
+All workflows live in `.github/workflows/`. Five workflows cover the full development lifecycle.
 
 ### Common Settings (all workflows)
 
@@ -33,10 +33,11 @@ Steps:
 8. Verify `.app` bundle structure
 9. **Verify code signature** — confirms `Authority=TempoStatusBar Signing` is present
 10. Create DMG with `hdiutil create`
-11. Delete any previous `pr-<N>` pre-release for this PR (`gh release delete --cleanup-tag`, ignored if absent)
-12. Publish DMG as a pre-release tagged `pr-<N>` via `softprops/action-gh-release` (raw `.dmg`, no zip wrapping)
-13. **Post or update PR comment** with the release-page download link (see below)
-14. **Clean up signing keychain** (post-run step)
+11. **Sign and notarize DMG** (skipped on fork PRs) — sign the DMG with the Developer ID identity, submit via `xcrun notarytool`, staple, and re-verify with `spctl --assess`
+12. Delete any previous `pr-<N>` pre-release for this PR (`gh release delete --cleanup-tag`, ignored if absent)
+13. Publish DMG as a pre-release tagged `pr-<N>` via `softprops/action-gh-release` (raw `.dmg`, no zip wrapping)
+14. **Post or update PR comment** with the release-page download link (see below)
+15. **Clean up signing keychain + notarization key** (post-run step)
 
 ### `code-quality`
 
@@ -90,42 +91,89 @@ The step uses `continue-on-error: true` so a comment failure doesn't fail the bu
 
 The `release-build` job uploads the DMG to the GitHub Release via `softprops/action-gh-release`, pinned to a full commit SHA (`3bb12739c298aeb8a4eeaf626c5b8d85266b0e65`, tag `v2.6.2`). SHA pinning is required here — this action writes to the public release page, so mutable refs (e.g. `@v2`, `@master`) are not acceptable. The upload step is gated with `if: github.event_name == 'release' && github.event.action == 'created'` so that manual `workflow_dispatch` runs (used for build testing) skip the upload and do not fail due to the absence of an associated release.
 
+### Release name / tag consistency check
+
+The first step of `release-build` asserts that `github.event.release.tag_name` equals `github.event.release.name`. This catches the failure mode where a release is created in the GitHub UI with a title like `v1.3.0-RC1` but the underlying tag is left at `v1.3.0` — the release looks correct in the UI but the workflow extracts the wrong version from `GITHUB_REF`, and the stable `v1.3.0` tag gets pushed prematurely. The check fails the workflow before any build work runs and prints recovery instructions. It's gated on `if: github.event_name == 'release'` so `workflow_dispatch` runs are unaffected.
+
 ---
 
 ## `pr-cleanup.yml` — PR Cleanup
 
 **Trigger:** `pull_request` with `types: [closed]` (fires on both merge and unmerged close)
 
-Runs on `ubuntu-latest`. Single step: `gh release delete pr-<N> --yes --cleanup-tag` (with `|| true` so a missing release is non-fatal). Skipped for fork PRs.
+Runs on `self-hosted`. Single step: `gh release delete pr-<N> --yes --cleanup-tag` (with `|| true` so a missing release is non-fatal). Skipped for fork PRs.
 
 This workflow exists so per-PR pre-releases do not accumulate on the Releases page indefinitely.
 
 ---
 
+## `notify-failures.yml` — Main Branch Failure Notification
+
+**Trigger:** `workflow_run` on the `"Main Verification"` workflow, type `completed`
+
+**Permissions:** `contents: read`, `issues: write`, `actions: read`
+
+**Concurrency:** group `notify-main-failure`, `cancel-in-progress: false`
+
+**Job: `notify`**
+
+Runs on `self-hosted`. The job only executes when:
+- `github.event.workflow_run.conclusion == 'failure'`
+- `github.event.workflow_run.head_branch == 'main'`
+
+**Steps:**
+
+1. **Deduplication check** — uses `gh issue list` + `jq` to count open issues with the title `"Build failure: <workflow name>"`. If one already exists, no new issue is created (prevents flood of duplicate issues for repeated failures before anyone fixes the build).
+2. **Dynamic label** — checks whether a `bug` label exists in the repo (`gh label list | grep -qx "bug"`). Only passes `--label bug` to `gh issue create` if the label is present; omits the flag otherwise to avoid a hard failure on repos without that label.
+3. **Issue creation** — creates an issue titled `"Build failure: Main Verification"` with a body linking to the failed workflow run URL.
+
+**Key design points:**
+- The `workflow_run` trigger (rather than a step inside `main-verification.yml`) keeps failure notification fully decoupled from the build workflow. The build workflow does not need to be modified when notification behavior changes.
+- The branch guard (`head_branch == 'main'`) prevents the job from firing on feature-branch runs of the same workflow.
+- `notify-failures.yml` does **not** include itself in the `workflows:` list — self-referential inclusion would cause the workflow to trigger on its own runs.
+- `cancel-in-progress: false` on the concurrency group ensures back-to-back main failures each get their own issue-creation attempt (though deduplication prevents actual duplicate issues).
+
+---
+
 ## Code Signing
 
-All three workflows sign the `.app` bundle using a self-signed certificate named **"TempoStatusBar Signing"** stored as a repository secret. The signing process runs as a discrete step before the archive step and is cleaned up in a post-run step.
+All three workflows sign the Release `.app` bundle with a **Developer ID Application** certificate issued by Apple. The Release configuration sets `CODE_SIGN_IDENTITY = "Developer ID Application"`, `CODE_SIGN_STYLE = Manual`, and `ENABLE_HARDENED_RUNTIME = YES`; the team ID is supplied at build time via the `DEVELOPMENT_TEAM` secret. The Debug configuration is signed ad-hoc (`CODE_SIGN_IDENTITY = "-"`) so local developers don't need access to the production cert.
+
+The release and PR workflows additionally **notarize and staple** the DMG so Gatekeeper accepts the download silently. Main builds sign but do **not** notarize — see [Key Design Decisions](#key-design-decisions).
 
 **Secrets required (configured in GitHub repository settings):**
 
 | Secret | Content |
 |---|---|
-| `SIGNING_CERT_P12_BASE64` | Base64-encoded `.p12` file containing the self-signed certificate and private key |
+| `SIGNING_CERT_P12_BASE64` | Base64-encoded `.p12` file containing the Developer ID Application certificate and its private key |
 | `SIGNING_CERT_PASSWORD` | Password for the `.p12` archive |
 | `KEYCHAIN_PASSWORD` | Password for the temporary CI keychain created during the run |
+| `DEVELOPMENT_TEAM` | Apple Developer Team ID (10-character alphanumeric, e.g. `ABC1234567`) — overrides the empty `DEVELOPMENT_TEAM` in `project.pbxproj` |
+| `AC_API_KEY_ID` | App Store Connect API Key ID |
+| `AC_API_ISSUER_ID` | App Store Connect API Issuer ID |
+| `AC_API_KEY_P8_BASE64` | Base64-encoded `.p8` private key downloaded when the API key was created |
 
-**Signing process:**
+**Signing process (all workflows):**
 
 1. Decode `SIGNING_CERT_P12_BASE64` to a `.p12` file in `$RUNNER_TEMP`
 2. Create a temporary keychain (`$RUNNER_TEMP/build.keychain-db`) and unlock it
 3. Import the `.p12` into the temporary keychain
 4. Prepend the temp keychain to the user's keychain search list so Xcode finds the identity automatically during build
 5. Delete the `.p12` file from disk immediately after import
-6. Build — Xcode signs the `.app` bundle using the discovered identity
-7. Verify: `codesign --verify --deep --strict` + assert `Authority=TempoStatusBar Signing` is present in the signature
+6. Build — Xcode signs the `.app` bundle using the Developer ID identity (with Hardened Runtime)
+7. Verify: `codesign --verify --deep --strict`, assert `Authority=Developer ID Application:` is present, and assert the `runtime` flag appears in the signature flags
 8. Post-run: delete the temporary keychain (`security delete-keychain`)
 
-**Self-signed cert behavior:** macOS does not trust self-signed certs for Gatekeeper validation, so the build is not notarized. However, `codesign --verify --deep --strict` still passes and the signature establishes a stable identity that can be compared across builds. The `security find-identity -p codesigning` step is run without `-v` (valid) because the self-signed cert will not appear as valid in the system trust store.
+**Notarization (release and PR workflows):**
+
+1. Decode `AC_API_KEY_P8_BASE64` to `$RUNNER_TEMP/AuthKey.p8`
+2. Sign the DMG itself with `codesign --sign "Developer ID Application: …" --timestamp` (notarytool will reject an unsigned container)
+3. Submit the DMG via `xcrun notarytool submit … --key … --key-id … --issuer … --wait --timeout 30m`
+4. Staple with `xcrun stapler staple` so the ticket is embedded in the DMG and Gatekeeper does not need to call home on first launch
+5. Re-verify with `xcrun stapler validate` and `spctl --assess --type open --context context:primary-signature` — this is the canonical end-user Gatekeeper check
+6. Post-run: delete the temporary keychain and `AuthKey.p8`
+
+**Why App Store Connect API key instead of an app-specific password?** API keys are revocable per-key without rotating the Apple ID, scoped to a single role, and work headlessly without 2FA flows. App-specific passwords work with `notarytool` too but are tied to the Apple ID and more painful to rotate.
 
 ---
 
@@ -142,5 +190,7 @@ All three workflows sign the `.app` bundle using a self-signed certificate named
 - **Trivy action** — pinned to `@master` (mutable ref); consider pinning to a fixed tag in a future cleanup.
 - **SHA pinning for release-publishing actions** — `softprops/action-gh-release` is pinned to a full commit SHA rather than a tag or moving ref. Actions that write to the public release page carry higher supply-chain risk if compromised; use full SHA pins for them. When updating the pin, verify the SHA with `gh api repos/softprops/action-gh-release/git/refs/tags/<version>` before committing.
 - **PR comment body construction** — the `github-script` step in `pr-verification.yml` builds the PR comment using an array joined with `\n` rather than a template literal. Template literals with unindented multi-line content break YAML block scalars; the array approach keeps every JavaScript line at consistent indentation within the `script: |` block and avoids YAML parse errors. The download URL is constructed deterministically from the PR number and version string — no `listWorkflowRunArtifacts` API call is needed.
-- **Self-signed code signing** — all workflows sign the archive using a self-signed cert stored as a base64 secret. This establishes a consistent signing identity and satisfies `codesign --verify --deep --strict` without requiring an Apple Developer account or notarization. The cert is imported into a temporary keychain that is deleted at the end of each run — it is never written to the runner's permanent login keychain.
-- **Signing verification in CI** — a dedicated "Verify code signature" step asserts `Authority=TempoStatusBar Signing` is present in the built archive. This catches accidental ad-hoc or unsigned builds before the DMG is packaged and distributed.
+- **Developer ID signing with Hardened Runtime** — Release builds are signed with an Apple-issued Developer ID Application certificate and built with `ENABLE_HARDENED_RUNTIME = YES`. The cert is imported into a temporary keychain that is deleted at the end of each run — it is never written to the runner's permanent login keychain. Debug builds use ad-hoc signing (`CODE_SIGN_IDENTITY = "-"`) so local development doesn't depend on the production cert.
+- **Notarization on PR and release builds** — both `pr-verification.yml` and `release-tag.yml` sign, notarize, and staple the DMG so users (including maintainers grabbing a PR build) don't hit Gatekeeper's first-launch warning. Main builds still skip notarization because their DMGs are not distributed. Notarization adds ~30s–2min per build. The PR notarization steps are gated on `github.event.pull_request.head.repo.full_name == github.repository` so that fork PRs (no secrets) skip them gracefully — those PRs still produce a signed DMG, just not a notarized one, and the publish + comment steps are already skipped for forks.
+- **Signing verification in CI** — the "Verify code signature" step asserts both `Authority=Developer ID Application:` and the presence of the `runtime` flag in the signature. This catches accidental ad-hoc, self-signed, or unhardened builds before the DMG is packaged.
+- **`spctl --assess` over `stapler validate` alone** — the release workflow runs both. `stapler validate` confirms a ticket exists locally; `spctl --assess --type open --context context:primary-signature` is what Gatekeeper actually runs when a user opens the file from a quarantined download. Asserting both protects against the case where stapling appeared to succeed but the ticket doesn't satisfy Gatekeeper.

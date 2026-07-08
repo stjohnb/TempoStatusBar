@@ -1,11 +1,12 @@
 {
-  "sourceSha": "f40eb2e0a9277dc5d2bdc0917d751d0dbee7371b",
+  "sourceSha": "272e72b64cc7b9ea28f3dd21f968073123590e78",
   "publishedReleases": {
     "v1.3.1": "preexisting",
     "v1.0.0": "c341305e97f20190c208908f758b9caac8162afa",
     "v1.0.1": "6a883d9fec7f70982448e5fb1daa103d1cfd79b6",
     "v1.0.2": "273e7c31da1ebc2f8a8c204107017a58009a74b7",
     "v1.0.3": "d00c565210a9cf0d72ba1330003bbd5b17ccbbfd",
-    "v1.1.0": "eba7a66b66d0957bdee06c5bafea6e65be336615"
+    "v1.1.0": "eba7a66b66d0957bdee06c5bafea6e65be336615",
+    "v1.2.0": "c86d75848dc6289fbcf5f455cebe9ddc9e1fe8c3"
   }
 }

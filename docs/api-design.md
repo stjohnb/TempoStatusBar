@@ -32,7 +32,7 @@ Used to resolve the user's identity from their API token.
 }
 ```
 
-**Usage in app:** The `name` field (Jira Server username/login) is used as the worklog query identifier. The `UserInfo` struct maps `accountId` to `name` in its custom decoder — this is intentional; the Tempo Server API uses username, not Atlassian cloud account IDs.
+**Usage in app:** `UserInfo` has `name`, `key`, and `emailAddress` fields decoded directly from the JSON response — no custom decoder. `fetchLatestWorklog` uses `userInfo.name` as the worklog query identifier, falling back to `userInfo.key`. The Tempo Server API uses Jira usernames, not Atlassian cloud account IDs.
 
 **Error handling:**
 - 401 → `TempoError.unauthorized`
@@ -106,11 +106,23 @@ enum TempoError: Error, LocalizedError {
 }
 ```
 
-`AppDelegate.updateStatusBarDisplay()` maps specific error message strings to user-friendly tooltips:
-- "Unauthorized" → bad API token
-- "Forbidden" → permissions issue
-- "not found" → bad Account ID
-- "Network" → connectivity
+`TempoService` throws `TempoError` directly. `WorklogStateManager.loadTempoData()` catches it and stores it as `WorklogStateError.tempo(tempoError)` in `lastError`. `AppDelegate.updateStatusBarDisplay()` then pattern-matches on the typed `WorklogStateError` to choose the tooltip string — it does **not** do substring matching on error description strings. See the "Status Bar Display Logic" section in OVERVIEW.md for the full mapping.
+
+## Test Connection Flow (`runConnectionTest`)
+
+`runConnectionTest` is used by `SettingsView`'s "Test Connection" button. It diverges from the normal worklog fetch path in one important way: when `accountId` is non-empty it calls `/myself` **for identity validation**, not just identifier resolution.
+
+```
+accountId non-empty?
+  ├─ YES: call /myself → compare name/key against accountId (case-insensitive)
+  │         mismatch → return ⚠️ warning, stop (no worklog fetch)
+  │         match or server returned no identity fields → fall through
+  └─ NO:  skip /myself
+→ call fetchLatestWorklog (uses accountId if non-empty, else auto-resolves via /myself internally)
+→ return ✅ success or ❌ error message
+```
+
+This differs from normal operation: during regular refresh, `/myself` is only called when `accountId` is absent. The extra identity check in `runConnectionTest` catches mismatches between the API token owner and the supplied `accountId` at settings-validation time before the error would surface as a confusing empty-worklog result.
 
 ## Adding New API Calls
 

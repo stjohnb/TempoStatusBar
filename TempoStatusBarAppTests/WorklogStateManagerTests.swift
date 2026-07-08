@@ -17,7 +17,8 @@ final class WorklogStateManagerTests: XCTestCase {
         
         // Reset state manager for testing
         stateManager.resetForTesting()
-        
+        stateManager.retryDelay = 0.05
+
         // Inject mocks
         stateManager.credentialManager = mockCredentialManager
         stateManager.tempoService = mockTempoService
@@ -112,21 +113,38 @@ final class WorklogStateManagerTests: XCTestCase {
     }
 
     func testCheckCredentialsAndRefresh_CredentialLoadError_NoStoredCredentials() {
-        // Given: hasStoredCredentials() returns true but loadCredentials() throws
-        // noStoredCredentials — e.g., one UserDefaults key is deleted between the two calls.
-        mockCredentialManager.hasCredentialsResult = true
+        // Given: loadCredentials() throws noStoredCredentials
         mockCredentialManager.loadCredentialsError = CredentialError.noStoredCredentials
 
         // When
         stateManager.checkCredentialsAndRefresh()
 
-        // Then
+        // Then: noStoredCredentials is treated as the "no credentials" branch — no error surfaced
         XCTAssertFalse(stateManager.hasCredentials)
         XCTAssertEqual(stateManager.warningThreshold, 7)
-        XCTAssertNotNil(stateManager.errorMessage)
-        XCTAssertTrue(stateManager.errorMessage?.contains("Credential error") == true)
+        XCTAssertNil(stateManager.errorMessage)
     }
     
+    func testCheckCredentialsAndRefresh_LoadsCredentialsOnce() async {
+        // Given
+        let credentials = CredentialManager.Credentials(
+            apiToken: "test-token",
+            accountId: "test-account",
+            jiraURL: "https://test.atlassian.net",
+            warningThreshold: 5
+        )
+        mockCredentialManager.mockCredentials = credentials
+        mockCredentialManager.hasCredentialsResult = true
+        mockTempoService.mockWorklog = nil
+
+        // When
+        stateManager.checkCredentialsAndRefresh()
+        await Task.sleep(100_000_000) // 0.1 seconds — let the spawned Task complete
+
+        // Then: loadCredentials() must be called exactly once (not again inside loadTempoData)
+        XCTAssertEqual(mockCredentialManager.loadCredentialsCallCount, 1)
+    }
+
     // MARK: - Data Loading Tests
     
     func testLoadTempoData_Success() async {
@@ -192,8 +210,7 @@ final class WorklogStateManagerTests: XCTestCase {
         
         // Then
         XCTAssertFalse(stateManager.isLoading)
-        XCTAssertNotNil(stateManager.errorMessage)
-        XCTAssertTrue(stateManager.errorMessage?.contains("No credentials configured") == true)
+        XCTAssertEqual(stateManager.lastError, .noCredentials)
         XCTAssertFalse(stateManager.hasCredentials)
     }
     
@@ -214,10 +231,9 @@ final class WorklogStateManagerTests: XCTestCase {
         
         // Then
         XCTAssertFalse(stateManager.isLoading)
-        XCTAssertNotNil(stateManager.errorMessage)
-        XCTAssertTrue(stateManager.errorMessage?.contains("Tempo error") == true)
+        XCTAssertEqual(stateManager.lastError, .tempo(.unauthorized))
     }
-    
+
     func testLoadTempoData_NetworkError() async {
         // Given
         let credentials = CredentialManager.Credentials(
@@ -229,14 +245,83 @@ final class WorklogStateManagerTests: XCTestCase {
         mockCredentialManager.mockCredentials = credentials
         mockTempoService.mockError = TempoError.networkError
         stateManager.hasCredentials = true
-        
+
         // When
         await stateManager.loadTempoData()
-        
-        // Then
+
+        // Then: initial error state
         XCTAssertFalse(stateManager.isLoading)
-        XCTAssertNotNil(stateManager.errorMessage)
-        XCTAssertTrue(stateManager.errorMessage?.contains("Tempo error") == true)
+        XCTAssertEqual(stateManager.lastError, .tempo(.networkError))
+
+        // Simulate network recovery: provide a valid worklog and clear the error
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS"
+        let twoDaysAgo = Calendar.current.date(byAdding: .day, value: -2, to: Date())!
+        mockTempoService.mockError = nil
+        mockTempoService.mockWorklog = Worklog(
+            dateStarted: formatter.string(from: twoDaysAgo),
+            timeSpentSeconds: 3600,
+            comment: "Retry success",
+            issue: nil
+        )
+
+        // Wait for the retry task to fire (retryDelay = 0.05s)
+        await Task.sleep(100_000_000) // 0.1 seconds
+
+        // Then: retry should have succeeded
+        XCTAssertNil(stateManager.errorMessage)
+        XCTAssertNotNil(stateManager.daysSinceLastWorklog)
+    }
+
+    func testLoadTempoData_NonNetworkError_DoesNotRetry() async {
+        // Given
+        let credentials = CredentialManager.Credentials(
+            apiToken: "test-token",
+            accountId: "test-account",
+            jiraURL: "https://test.atlassian.net",
+            warningThreshold: 7
+        )
+        mockCredentialManager.mockCredentials = credentials
+        mockTempoService.mockError = TempoError.unauthorized
+        stateManager.hasCredentials = true
+
+        // When
+        await stateManager.loadTempoData()
+
+        // Wait past the retry window
+        await Task.sleep(100_000_000) // 0.1 seconds
+
+        // Then: error should persist unchanged (no silent retry)
+        XCTAssertEqual(stateManager.lastError, .tempo(.unauthorized))
+    }
+
+    func testResetForTesting_CancelsRetryTask() async {
+        // Given: trigger a network error to start a retry task
+        let credentials = CredentialManager.Credentials(
+            apiToken: "test-token",
+            accountId: "test-account",
+            jiraURL: "https://test.atlassian.net",
+            warningThreshold: 7
+        )
+        mockCredentialManager.mockCredentials = credentials
+        mockTempoService.mockError = TempoError.networkError
+        stateManager.hasCredentials = true
+        await stateManager.loadTempoData()
+
+        // Reset before retry fires
+        stateManager.resetForTesting()
+        stateManager.credentialManager = mockCredentialManager
+        stateManager.tempoService = mockTempoService
+        stateManager.retryDelay = 0.05
+
+        let callCountBeforeWindow = mockTempoService.fetchCallCount
+
+        // Wait past the original retry window
+        await Task.sleep(100_000_000) // 0.1 seconds
+
+        // Then: cancelled retry task must not have incremented the call count
+        XCTAssertEqual(mockTempoService.fetchCallCount, callCountBeforeWindow)
     }
     
     // MARK: - Computed Properties Tests
@@ -435,10 +520,9 @@ final class WorklogStateManagerTests: XCTestCase {
         await stateManager.loadTempoData()
         
         // Then
-        XCTAssertTrue(stateManager.errorMessage?.contains("Tempo error") == true)
-        XCTAssertTrue(stateManager.errorMessage?.contains("Unauthorized") == true)
+        XCTAssertEqual(stateManager.lastError, .tempo(.unauthorized))
     }
-    
+
     func testErrorHandling_GenericError() async {
         // Given
         let credentials = CredentialManager.Credentials(
@@ -455,8 +539,7 @@ final class WorklogStateManagerTests: XCTestCase {
         await stateManager.loadTempoData()
         
         // Then
-        XCTAssertTrue(stateManager.errorMessage?.contains("Error:") == true)
-        XCTAssertTrue(stateManager.errorMessage?.contains("Test error") == true)
+        XCTAssertEqual(stateManager.lastError, .other(message: "Test error"))
     }
     
     // MARK: - State Clearing Tests
@@ -470,7 +553,7 @@ final class WorklogStateManagerTests: XCTestCase {
             comment: "Test",
             issue: nil
         )
-        stateManager.errorMessage = "Test error"
+        stateManager.lastError = .other(message: "Test error")
         stateManager.warningThreshold = 10
         
         // When
@@ -490,12 +573,14 @@ class MockCredentialManager: CredentialManagerProtocol {
     var mockCredentials: CredentialManager.Credentials?
     var hasCredentialsResult: Bool = false
     var loadCredentialsError: Error?
-    
+    var loadCredentialsCallCount = 0
+
     func hasStoredCredentials() -> Bool {
         return hasCredentialsResult
     }
-    
+
     func loadCredentials() throws -> CredentialManager.Credentials {
+        loadCredentialsCallCount += 1
         if let error = loadCredentialsError {
             throw error
         }
@@ -509,12 +594,110 @@ class MockCredentialManager: CredentialManagerProtocol {
 class MockTempoService: TempoServiceProtocol {
     var mockWorklog: Worklog?
     var mockError: Error?
+    var fetchCallCount = 0
+    var mockUserInfo: UserInfo?
+    var fetchUserInfoError: Error?
+    var fetchUserInfoCallCount = 0
 
     func fetchLatestWorklog(apiToken: String, jiraURL: String, accountId: String? = nil) async throws -> Worklog? {
+        fetchCallCount += 1
         if let error = mockError {
             throw error
         }
         return mockWorklog
+    }
+
+    func fetchUserInfo(apiToken: String, jiraURL: String) async throws -> UserInfo? {
+        fetchUserInfoCallCount += 1
+        if let error = fetchUserInfoError {
+            throw error
+        }
+        return mockUserInfo
+    }
+}
+
+// MARK: - runConnectionTest Tests
+
+final class ConnectionTestTests: XCTestCase {
+
+    func testAccountIdMismatch_ReturnsWarning_SkipsWorklogFetch() async {
+        let service = MockTempoService()
+        service.mockUserInfo = UserInfo(name: "alice", key: "alice", emailAddress: nil)
+
+        let result = await runConnectionTest(
+            apiToken: "token", accountId: "bob", jiraURL: "https://jira.example.com",
+            service: service
+        )
+
+        XCTAssert(result.contains("⚠️"), "Expected warning emoji in result: \(result)")
+        XCTAssertEqual(service.fetchCallCount, 0, "Worklog fetch should be skipped on mismatch")
+    }
+
+    func testAccountIdMatchesCaseInsensitively_ProceedsToWorklogFetch() async {
+        let service = MockTempoService()
+        service.mockUserInfo = UserInfo(name: "Alice", key: nil, emailAddress: nil)
+
+        let result = await runConnectionTest(
+            apiToken: "token", accountId: "alice", jiraURL: "https://jira.example.com",
+            service: service
+        )
+
+        XCTAssert(result.contains("✅"), "Expected success in result: \(result)")
+        XCTAssertEqual(service.fetchCallCount, 1, "Worklog fetch should proceed when IDs match case-insensitively")
+    }
+
+    func testAccountIdMatchesViaKeyOnly_ProceedsToWorklogFetch() async {
+        let service = MockTempoService()
+        service.mockUserInfo = UserInfo(name: nil, key: "Alice", emailAddress: nil)
+
+        let result = await runConnectionTest(
+            apiToken: "token", accountId: "alice", jiraURL: "https://jira.example.com",
+            service: service
+        )
+
+        XCTAssert(result.contains("✅"), "Expected success when accountId matches key: \(result)")
+        XCTAssertEqual(service.fetchCallCount, 1, "Worklog fetch should proceed when accountId matches key")
+    }
+
+    func testBothIdentityFieldsNil_SkipsIdentityCheck_ProceedsToWorklogFetch() async {
+        let service = MockTempoService()
+        service.mockUserInfo = UserInfo(name: nil, key: nil, emailAddress: nil)
+
+        let result = await runConnectionTest(
+            apiToken: "token", accountId: "someaccount", jiraURL: "https://jira.example.com",
+            service: service
+        )
+
+        XCTAssert(result.contains("✅"), "Expected success in result: \(result)")
+        XCTAssertEqual(service.fetchCallCount, 1, "Worklog fetch should proceed when server returns no identity fields")
+    }
+
+    func testFetchUserInfoThrows_ReturnsError_SkipsWorklogFetch() async {
+        let service = MockTempoService()
+        service.fetchUserInfoError = TempoError.unauthorized
+
+        let result = await runConnectionTest(
+            apiToken: "token", accountId: "someaccount", jiraURL: "https://jira.example.com",
+            service: service
+        )
+
+        XCTAssert(result.contains("❌"), "Expected error in result: \(result)")
+        XCTAssertEqual(service.fetchCallCount, 0, "Worklog fetch should be skipped when user info fetch fails")
+    }
+
+    func testEmptyAccountId_SkipsIdentityCheck_ProceedsToWorklogFetch() async {
+        let service = MockTempoService()
+        // fetchUserInfo should never be called when accountId is empty
+        service.fetchUserInfoError = TempoError.unauthorized
+
+        let result = await runConnectionTest(
+            apiToken: "token", accountId: "", jiraURL: "https://jira.example.com",
+            service: service
+        )
+
+        XCTAssert(result.contains("✅"), "Expected success when accountId is empty: \(result)")
+        XCTAssertEqual(service.fetchUserInfoCallCount, 0, "fetchUserInfo should be skipped when accountId is empty")
+        XCTAssertEqual(service.fetchCallCount, 1, "Worklog fetch should proceed directly when accountId is empty")
     }
 }
 

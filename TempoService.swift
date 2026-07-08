@@ -1,5 +1,7 @@
 import Foundation
+import Network
 import OSLog
+import Security
 import SwiftUI
 import AppKit
 
@@ -12,6 +14,7 @@ protocol CredentialManagerProtocol {
 
 protocol TempoServiceProtocol {
     func fetchLatestWorklog(apiToken: String, jiraURL: String, accountId: String?) async throws -> Worklog?
+    func fetchUserInfo(apiToken: String, jiraURL: String) async throws -> UserInfo?
 }
 
 // MARK: - Centralized State Management
@@ -23,12 +26,19 @@ class WorklogStateManager: ObservableObject {
     @Published var daysSinceLastWorklog: Int?
     @Published var latestWorklog: Worklog?
     @Published var isLoading = false
-    @Published var errorMessage: String?
+    @Published var lastError: WorklogStateError?
     @Published var hasCredentials = false
     @Published var warningThreshold = 7
 
+    var errorMessage: String? { lastError?.displayMessage }
+
     private var refreshTimer: Timer?
+    private var networkMonitor: NWPathMonitor?
+    private var retryTask: Task<Void, Never>?
+    private var lastErrorWasNetworkError = false
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "TempoStatusBar", category: "WorklogStateManager")
+
+    var retryDelay: TimeInterval = 15
 
     // Dependency injection for testing
     var credentialManager: CredentialManagerProtocol = CredentialManager.shared
@@ -36,11 +46,14 @@ class WorklogStateManager: ObservableObject {
 
     init() {
         setupTimer()
+        setupNetworkMonitor()
         checkCredentialsAndRefresh()
     }
 
     deinit {
         refreshTimer?.invalidate()
+        networkMonitor?.cancel()
+        retryTask?.cancel()
     }
 
     // MARK: - Public Methods
@@ -52,25 +65,39 @@ class WorklogStateManager: ObservableObject {
     }
 
     func checkCredentialsAndRefresh() {
-        hasCredentials = credentialManager.hasStoredCredentials()
-        if hasCredentials {
-            do {
-                let credentials = try credentialManager.loadCredentials()
-                warningThreshold = credentials.warningThreshold
-                refresh()
-            } catch {
-                logger.error("Failed to load credentials: \(error.localizedDescription, privacy: .public)")
-                hasCredentials = false
-                clearData()
-                errorMessage = "Credential error: \(error.localizedDescription)"
+        do {
+            let credentials = try credentialManager.loadCredentials()
+            hasCredentials = true
+            warningThreshold = credentials.warningThreshold
+            Task {
+                await loadTempoData(preloadedCredentials: credentials)
             }
-        } else {
-            // Clear any existing data when no credentials are available
+        } catch CredentialError.noStoredCredentials {
+            hasCredentials = false
             clearData()
+        } catch {
+            logger.error("Failed to load credentials: \(error.localizedDescription, privacy: .public)")
+            hasCredentials = false
+            clearData()
+            lastError = .credentialError(detail: error.localizedDescription)
         }
     }
 
     // MARK: - Private Methods
+
+    private func setupNetworkMonitor() {
+        let monitor = NWPathMonitor()
+        networkMonitor = monitor
+        let queue = DispatchQueue(label: "com.stjohnsoftware.TempoStatusBar.NetworkMonitor")
+        monitor.pathUpdateHandler = { [weak self] path in
+            guard let self, path.status == .satisfied else { return }
+            Task { @MainActor in
+                guard self.hasCredentials, self.lastErrorWasNetworkError else { return }
+                await self.loadTempoData()
+            }
+        }
+        monitor.start(queue: queue)
+    }
 
     private func setupTimer() {
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
@@ -83,7 +110,7 @@ class WorklogStateManager: ObservableObject {
     func clearData() {
         daysSinceLastWorklog = nil
         latestWorklog = nil
-        errorMessage = nil
+        lastError = nil
         warningThreshold = 7
     }
 
@@ -93,16 +120,22 @@ class WorklogStateManager: ObservableObject {
         isLoading = false
         refreshTimer?.invalidate()
         refreshTimer = nil
+        networkMonitor?.cancel()
+        networkMonitor = nil
+        retryTask?.cancel()
+        retryTask = nil
+        lastErrorWasNetworkError = false
     }
 
-    func loadTempoData() async {
+    func loadTempoData(preloadedCredentials: CredentialManager.Credentials? = nil) async {
         guard hasCredentials else { return }
+        guard !isLoading else { return }
 
         isLoading = true
-        errorMessage = nil
+        lastError = nil
 
         do {
-            let credentials = try credentialManager.loadCredentials()
+            let credentials = try preloadedCredentials ?? credentialManager.loadCredentials()
 
             // Fetch the actual worklog data
             let worklog = try await tempoService.fetchLatestWorklog(
@@ -112,27 +145,42 @@ class WorklogStateManager: ObservableObject {
             )
 
             isLoading = false
+            lastErrorWasNetworkError = false
+            retryTask?.cancel()
+            retryTask = nil
             latestWorklog = worklog
             daysSinceLastWorklog = worklog?.daysSinceStarted
 
         } catch {
             isLoading = false
             if let credentialError = error as? CredentialError {
+                lastErrorWasNetworkError = false
+                hasCredentials = false
                 switch credentialError {
                 case .noStoredCredentials:
-                    errorMessage = "No credentials configured"
-                    hasCredentials = false
+                    lastError = .noCredentials
                 case .decodingFailed(let error):
-                    errorMessage = "Credential error: \(error.localizedDescription)"
-                    hasCredentials = false
+                    lastError = .credentialError(detail: error.localizedDescription)
                 case .keychainError(let status):
-                    errorMessage = "Keychain error: \(status)"
-                    hasCredentials = false
+                    lastError = .keychainError(status: status)
                 }
             } else if let tempoError = error as? TempoError {
-                errorMessage = "Tempo error: \(tempoError.localizedDescription)"
+                lastError = .tempo(tempoError)
+                if case .networkError = tempoError {
+                    lastErrorWasNetworkError = true
+                    retryTask?.cancel()
+                    retryTask = Task { [weak self] in
+                        guard let self else { return }
+                        try? await Task.sleep(nanoseconds: UInt64(retryDelay * 1_000_000_000))
+                        guard !Task.isCancelled else { return }
+                        await loadTempoData()
+                    }
+                } else {
+                    lastErrorWasNetworkError = false
+                }
             } else {
-                errorMessage = "Error: \(error.localizedDescription)"
+                lastErrorWasNetworkError = false
+                lastError = .other(message: error.localizedDescription)
             }
         }
     }
@@ -141,36 +189,45 @@ class WorklogStateManager: ObservableObject {
 // MARK: - Computed Properties for Status Display
 
 extension WorklogStateManager {
-    var statusEmoji: String {
-        guard let days = daysSinceLastWorklog else { return "" }
+    private enum Severity {
+        case ok, warning, overdue
+    }
+
+    private var severity: Severity? {
+        guard let days = daysSinceLastWorklog else { return nil }
         if days <= warningThreshold {
-            return "✅"
+            return .ok
         } else if days == warningThreshold + 1 {
-            return "⏰"
+            return .warning
         } else {
-            return "🚨"
+            return .overdue
+        }
+    }
+
+    var statusEmoji: String {
+        switch severity {
+        case .ok: return "✅"
+        case .warning: return "⏰"
+        case .overdue: return "🚨"
+        case nil: return ""
         }
     }
 
     var statusColor: Color {
-        guard let days = daysSinceLastWorklog else { return .secondary }
-        if days <= warningThreshold {
-            return .green
-        } else if days <= warningThreshold + 1 {
-            return .orange
-        } else {
-            return .red
+        switch severity {
+        case .ok: return .green
+        case .warning: return .orange
+        case .overdue: return .red
+        case nil: return .secondary
         }
     }
 
     var statusBarColor: NSColor {
-        guard let days = daysSinceLastWorklog else { return .labelColor }
-        if days <= warningThreshold {
-            return .systemGreen
-        } else if days <= warningThreshold + 1 {
-            return .systemOrange
-        } else {
-            return .systemRed
+        switch severity {
+        case .ok: return .systemGreen
+        case .warning: return .systemOrange
+        case .overdue: return .systemRed
+        case nil: return .labelColor
         }
     }
 
@@ -229,22 +286,9 @@ struct WorklogIssue: Codable {
 }
 
 struct UserInfo: Codable {
-    let accountId: String?
     let name: String?
     let key: String?
     let emailAddress: String?
-
-    enum CodingKeys: String, CodingKey {
-        case key, name, emailAddress
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        key = try container.decodeIfPresent(String.self, forKey: .key)
-        name = try container.decodeIfPresent(String.self, forKey: .name)
-        emailAddress = try container.decodeIfPresent(String.self, forKey: .emailAddress)
-        accountId = name
-    }
 }
 
 class TempoService: TempoServiceProtocol {
@@ -261,39 +305,13 @@ class TempoService: TempoServiceProtocol {
     private init() {}
 
     func fetchUserInfo(apiToken: String, jiraURL: String) async throws -> UserInfo? {
-        let baseURL = jiraURL.hasSuffix("/") ? jiraURL : jiraURL + "/"
-        let urlString = "\(baseURL)rest/api/2/myself"
-
-        guard let url = URL(string: urlString) else {
-            throw TempoError.invalidURL
-        }
-
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(apiToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw TempoError.networkError
-            }
-
-            if httpResponse.statusCode == 401 {
-                throw TempoError.unauthorized
-            } else if httpResponse.statusCode == 403 {
-                throw TempoError.forbidden
-            } else if httpResponse.statusCode != 200 {
-                throw TempoError.apiError(statusCode: httpResponse.statusCode)
-            }
-
-            let userInfo = try JSONDecoder().decode(UserInfo.self, from: data)
-            return userInfo
-        } catch let error as TempoError {
-            throw error
-        } catch {
-            logger.error("fetchUserInfo network error: \(error.localizedDescription, privacy: .public)")
-            throw TempoError.networkError
+        try await performAuthorizedRequest(
+            path: "rest/api/2/myself",
+            queryItems: nil,
+            apiToken: apiToken,
+            jiraURL: jiraURL
+        ) { data in
+            try JSONDecoder().decode(UserInfo.self, from: data)
         }
     }
 
@@ -302,10 +320,10 @@ class TempoService: TempoServiceProtocol {
         if let accountId = accountId, !accountId.isEmpty {
             return try await fetchWorklog(apiToken: apiToken, jiraURL: jiraURL, identifier: accountId)
         }
-        
+
         // Only fetch user info when accountId is not provided
         let userInfo = try await fetchUserInfo(apiToken: apiToken, jiraURL: jiraURL)
-        
+
         let identifier = userInfo?.name ?? userInfo?.key ?? ""
 
         guard !identifier.isEmpty else {
@@ -315,39 +333,59 @@ class TempoService: TempoServiceProtocol {
         return try await fetchWorklog(apiToken: apiToken, jiraURL: jiraURL, identifier: identifier)
     }
 
-
-    func testConnection(apiToken: String, accountId: String, jiraURL: String) async throws -> Worklog? {
-        let userIdentifier = accountId.isEmpty ?
-            (try await fetchUserInfo(apiToken: apiToken, jiraURL: jiraURL))?.name ?? "" : accountId
-
-        guard !userIdentifier.isEmpty else {
-            throw TempoError.missingCredentials
-        }
-
-        return try await fetchWorklog(apiToken: apiToken, jiraURL: jiraURL, identifier: userIdentifier)
-    }
-
     private func fetchWorklog(apiToken: String, jiraURL: String, identifier: String) async throws -> Worklog? {
-        let baseURL = jiraURL.hasSuffix("/") ? jiraURL : jiraURL + "/"
-        let urlString = "\(baseURL)rest/tempo-timesheets/3/worklogs"
-
-        guard let url = URL(string: urlString) else {
-            throw TempoError.invalidURL
-        }
-
         let calendar = Calendar.current
         let endDate = Date()
         let startDate = calendar.date(byAdding: .day, value: -60, to: endDate) ?? endDate
 
-        var urlComponents = URLComponents(url: url, resolvingAgainstBaseURL: false)!
-        urlComponents.queryItems = [
+        let queryItems = [
             URLQueryItem(name: "username", value: identifier),
             URLQueryItem(name: "dateFrom", value: TempoService.worklogDateFormatter.string(from: startDate)),
             URLQueryItem(name: "dateTo", value: TempoService.worklogDateFormatter.string(from: endDate))
         ]
 
-        guard let finalURL = urlComponents.url else {
+        return try await performAuthorizedRequest(
+            path: "rest/tempo-timesheets/3/worklogs",
+            queryItems: queryItems,
+            apiToken: apiToken,
+            jiraURL: jiraURL
+        ) { data in
+            do {
+                let worklogs = try JSONDecoder().decode([Worklog].self, from: data)
+                return self.getMostRecentWorklog(worklogs)
+            } catch {
+                self.logger.debug("fetchWorklog: response is wrapped format, decoding as WorklogResponse")
+                let worklogResponse = try JSONDecoder().decode(WorklogResponse.self, from: data)
+                return self.getMostRecentWorklog(worklogResponse.results)
+            }
+        }
+    }
+
+    private func performAuthorizedRequest<T>(
+        path: String,
+        queryItems: [URLQueryItem]?,
+        apiToken: String,
+        jiraURL: String,
+        decoder: (Data) throws -> T
+    ) async throws -> T {
+        let baseURL = jiraURL.hasSuffix("/") ? jiraURL : jiraURL + "/"
+
+        guard let url = URL(string: "\(baseURL)\(path)") else {
             throw TempoError.invalidURL
+        }
+
+        let finalURL: URL
+        if let queryItems {
+            guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                throw TempoError.invalidURL
+            }
+            components.queryItems = queryItems
+            guard let queryURL = components.url else {
+                throw TempoError.invalidURL
+            }
+            finalURL = queryURL
+        } else {
+            finalURL = url
         }
 
         var request = URLRequest(url: finalURL)
@@ -369,18 +407,11 @@ class TempoService: TempoServiceProtocol {
                 throw TempoError.apiError(statusCode: httpResponse.statusCode)
             }
 
-            do {
-                let worklogs = try JSONDecoder().decode([Worklog].self, from: data)
-                return getMostRecentWorklog(worklogs)
-            } catch {
-                logger.warning("fetchWorklog: [Worklog] decode failed, falling back to WorklogResponse: \(error.localizedDescription, privacy: .public)")
-                let worklogResponse = try JSONDecoder().decode(WorklogResponse.self, from: data)
-                return getMostRecentWorklog(worklogResponse.results)
-            }
+            return try decoder(data)
         } catch let error as TempoError {
             throw error
         } catch {
-            logger.error("fetchWorklog network error: \(error.localizedDescription, privacy: .public)")
+            logger.error("network error at \(path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             throw TempoError.networkError
         }
     }
@@ -398,7 +429,30 @@ class TempoService: TempoServiceProtocol {
     }
 }
 
-enum TempoError: Error, LocalizedError {
+enum WorklogStateError: Equatable {
+    case noCredentials
+    case credentialError(detail: String)
+    case keychainError(status: OSStatus)
+    case tempo(TempoError)
+    case other(message: String)
+
+    var displayMessage: String {
+        switch self {
+        case .noCredentials:
+            return "No credentials configured"
+        case .credentialError(let detail):
+            return "Credential error: \(detail)"
+        case .keychainError(let status):
+            return "Keychain error: \(status)"
+        case .tempo(let error):
+            return "Tempo error: \(error.localizedDescription)"
+        case .other(let message):
+            return "Error: \(message)"
+        }
+    }
+}
+
+enum TempoError: Error, LocalizedError, Equatable {
     case missingCredentials
     case invalidURL
     case unauthorized

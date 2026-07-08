@@ -18,9 +18,32 @@ jobs:
     runs-on: macos-latest
     
     steps:
+    - name: Validate release name matches tag
+      if: github.event_name == 'release'
+      env:
+        RELEASE_TAG: ${{ github.event.release.tag_name }}
+        RELEASE_NAME: ${{ github.event.release.name }}
+      run: |
+        if [ -z "$RELEASE_NAME" ]; then
+          echo "❌ Release name is empty. Set the release title to match the tag (e.g. '$RELEASE_TAG')."
+          exit 1
+        fi
+        if [ "$RELEASE_TAG" != "$RELEASE_NAME" ]; then
+          echo "❌ Release name '$RELEASE_NAME' does not match tag '$RELEASE_TAG'."
+          echo ""
+          echo "This usually means an RC release was created with the title 'v1.2.3-RC1'"
+          echo "but the tag was left at 'v1.2.3', producing an orphaned tag at the stable"
+          echo "version. Either:"
+          echo "  - delete this release + tag (gh release delete '$RELEASE_TAG' --cleanup-tag --yes)"
+          echo "    and recreate it with matching name and tag, OR"
+          echo "  - edit the release to make name and tag identical."
+          exit 1
+        fi
+        echo "✅ Release name and tag both equal '$RELEASE_TAG'"
+
     - name: Checkout code
       uses: actions/checkout@v4
-      
+
     - name: Setup Xcode
       uses: maxim-lobanov/setup-xcode@v1
       with:
@@ -62,19 +85,25 @@ jobs:
         security find-identity -p codesigning "$KEYCHAIN_PATH"
 
     - name: Build release version
+      env:
+        DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
       run: |
         xcodebuild -project TempoStatusBarApp.xcodeproj \
           -scheme TempoStatusBarApp \
           -configuration Release \
           -destination 'platform=macOS' \
+          DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
           build
-          
+
     - name: Archive app
+      env:
+        DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
       run: |
         xcodebuild -project TempoStatusBarApp.xcodeproj \
           -scheme TempoStatusBarApp \
           -configuration Release \
           -destination 'platform=macOS' \
+          DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
           archive \
           -archivePath ./build/TempoStatusBarApp.xcarchive
 
@@ -91,9 +120,13 @@ jobs:
         echo "=== codesign --verify --deep --strict ==="
         codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
-        echo "=== Identity must be 'TempoStatusBar Signing' ==="
-        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=TempoStatusBar Signing' \
-          || { echo "❌ Expected Authority=TempoStatusBar Signing not found"; exit 1; }
+        echo "=== Identity must be a Developer ID Application cert ==="
+        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=Developer ID Application:' \
+          || { echo "❌ Expected Authority=Developer ID Application: not found"; exit 1; }
+
+        echo "=== Hardened Runtime must be enabled ==="
+        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'flags=.*runtime' \
+          || { echo "❌ Hardened Runtime flag not present in signature"; exit 1; }
 
         echo "✅ Code signature verified"
 
@@ -102,10 +135,61 @@ jobs:
         # Create a simple DMG structure
         mkdir -p ./dmg/TempoStatusBarApp.app
         cp -R ./build/TempoStatusBarApp.xcarchive/Products/Applications/TempoStatusBarApp.app ./dmg/
-        
+
         # Create DMG (requires hdiutil)
         hdiutil create -volname "TempoStatusBarApp" -srcfolder ./dmg -ov -format UDZO TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg
-        
+
+    - name: Sign DMG
+      run: |
+        DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
+
+        # Find the Developer ID Application identity in the temp keychain
+        IDENTITY=$(security find-identity -p codesigning "$RUNNER_TEMP/build.keychain-db" \
+          | grep 'Developer ID Application' \
+          | head -1 \
+          | awk -F'"' '{print $2}')
+
+        if [ -z "$IDENTITY" ]; then
+          echo "❌ Could not locate Developer ID Application identity for DMG signing"
+          exit 1
+        fi
+
+        echo "Signing DMG with: $IDENTITY"
+        codesign --sign "$IDENTITY" --timestamp "$DMG"
+        codesign --verify --verbose=2 "$DMG"
+
+    - name: Notarize DMG
+      env:
+        AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+        AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+        AC_API_KEY_P8_BASE64: ${{ secrets.AC_API_KEY_P8_BASE64 }}
+      run: |
+        DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
+        KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+
+        echo "$AC_API_KEY_P8_BASE64" | base64 --decode -o "$KEY_PATH"
+
+        # Submit and wait. notarytool exits non-zero if submission upload fails,
+        # but exits 0 even when the notarization status is "Invalid" — we re-check
+        # below by stapling, which only succeeds for accepted submissions.
+        xcrun notarytool submit "$DMG" \
+          --key "$KEY_PATH" \
+          --key-id "$AC_API_KEY_ID" \
+          --issuer "$AC_API_ISSUER_ID" \
+          --wait \
+          --timeout 30m
+
+        rm "$KEY_PATH"
+
+    - name: Staple notarization ticket
+      run: |
+        DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
+        xcrun stapler staple "$DMG"
+        xcrun stapler validate "$DMG"
+
+        # Final Gatekeeper assessment as an end-user would experience it
+        spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
+
     - name: Upload DMG to release
       if: github.event_name == 'release' && github.event.action == 'created'
       uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
@@ -117,6 +201,7 @@ jobs:
       run: |
         KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
         security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+        rm -f "$RUNNER_TEMP/AuthKey.p8"
 
   security-check:
     name: Security Check

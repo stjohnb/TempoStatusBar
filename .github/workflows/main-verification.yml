@@ -59,11 +59,14 @@ jobs:
         security find-identity -p codesigning "$KEYCHAIN_PATH"
 
     - name: Build main version
+      env:
+        DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
       run: |
         xcodebuild -project TempoStatusBarApp.xcodeproj \
           -scheme TempoStatusBarApp \
           -configuration Release \
           -destination 'platform=macOS' \
+          DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
           build
 
     - name: Run unit tests
@@ -96,11 +99,14 @@ jobs:
         fi
           
     - name: Archive app
+      env:
+        DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
       run: |
         xcodebuild -project TempoStatusBarApp.xcodeproj \
           -scheme TempoStatusBarApp \
           -configuration Release \
           -destination 'platform=macOS' \
+          DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
           archive \
           -archivePath ./build/TempoStatusBarApp.xcarchive
 
@@ -117,11 +123,15 @@ jobs:
         echo "=== codesign --verify --deep --strict ==="
         codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
-        echo "=== Identity must be 'TempoStatusBar Signing' ==="
-        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=TempoStatusBar Signing' \
-          || { echo "❌ Expected Authority=TempoStatusBar Signing not found"; exit 1; }
+        echo "=== Identity must be a Developer ID Application cert ==="
+        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=Developer ID Application:' \
+          || { echo "❌ Expected Authority=Developer ID Application: not found"; exit 1; }
 
-        echo "✅ Code signature verified"
+        echo "=== Hardened Runtime must be enabled ==="
+        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'flags=.*runtime' \
+          || { echo "❌ Hardened Runtime flag not present in signature"; exit 1; }
+
+        echo "✅ Code signature verified (Developer ID + Hardened Runtime; notarization happens on release tags only)"
 
     - name: Create DMG
       run: |
