@@ -22,7 +22,19 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+
+    - name: Prevent idle sleep
+      # macOS idle sleep tracks user input, not CPU load, so a busy job can't
+      # keep a shared Mac awake by itself (bonkus#1550). keep-awake (dot-files,
+      # symlinked into ~/bin, which is not on the runner service's PATH) holds
+      # a caffeinate assertion bounded to timeout-minutes plus margin; the
+      # always() step at the end releases it. Warn-only so a Mac without
+      # dot-files installed doesn't fail the job. See dot-files
+      # docs/macos-runners.md, "Power / keep-awake".
+      run: |
+        "$HOME/bin/keep-awake" on 40 \
+          || echo "::warning::keep-awake unavailable on $(hostname) — run dot-files/install.sh on this Mac"
+
     - name: Select Xcode
       # Shared convention for the two self-hosted Macs (used identically by
       # TempoStatusBar, namey and bonkus): resolve the newest Xcode installed on
@@ -225,6 +237,11 @@ jobs:
         security list-keychains -d user -s login.keychain-db 2>/dev/null || true
         security default-keychain -d user -s login.keychain-db 2>/dev/null || true
         security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+
+    - name: Release idle-sleep assertion
+      if: always()
+      run: |
+        "$HOME/bin/keep-awake" off || true
 
   security-check:
     name: Security Check

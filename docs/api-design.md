@@ -96,7 +96,7 @@ This means `accountId` in the credentials is really a Jira username override, no
 ## Error Types
 
 ```swift
-enum TempoError: Error, LocalizedError {
+enum TempoError: Error, LocalizedError, Equatable {
     case missingCredentials   // No usable identifier
     case invalidURL           // Malformed jiraURL
     case unauthorized         // HTTP 401

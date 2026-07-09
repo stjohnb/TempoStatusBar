@@ -16,8 +16,11 @@ CredentialManager.swift        Encrypted credential persistence
 ContentView.swift              SwiftUI popover (status detail view)
 SettingsView.swift             SwiftUI settings popover
 UpdateChecker.swift            GitHub Releases update check
+LaunchAtLoginManager.swift     SMAppService login-item wrapper (macOS 13+)
 TempoStatusBarAppTests/        XCTest unit tests (mocked)
 .github/workflows/             CI/CD (PR, main, release)
+README.md                      Private-repo README (setup/config instructions)
+README.public.md               Source for the public repo's README — see "Public Snapshot" below
 ```
 
 ### Key Classes
@@ -84,7 +87,7 @@ enum CredentialError: Error {
 **`TempoError`** — thrown by `TempoService` and wrapped in `WorklogStateError.tempo(_:)`:
 
 ```swift
-enum TempoError: Error {
+enum TempoError: Error, LocalizedError, Equatable {
     case missingCredentials   // identifier empty after /myself lookup
     case invalidURL           // malformed jiraURL
     case unauthorized         // HTTP 401
@@ -208,6 +211,13 @@ The automatic path passes `respectSkippedVersion: true` so the alert is suppress
 - `currentVersionProvider: () -> String` — overridden to return a controlled version string
 
 **No authentication:** requests are unauthenticated — there is no GitHub token plumbing (removed in #161, which repointed the checker from the private source repo at the public mirror). A `404` is treated as `.skipped(reason: "no published releases")` rather than an error, since the public repo may not yet have any releases published. HTTP `401` and other non-200 statuses are treated as `.failed`.
+
+### Public Snapshot
+
+Development happens in this private repo; a public mirror at `stjohnb/TempoStatusBar` is what `UpdateChecker` and end users see. Two independent mechanisms populate it, both external to this repo's own CI:
+
+- **Source snapshot** — a Claws sync routine periodically publishes a squashed, history-free snapshot of this repo to the public one. `README.public.md` (repo root) is the source for that snapshot's `README.md` — the filename never appears in the published output, so its content must never self-reference `README.public.md`, mention syncing/snapshotting, or reference this private source repo, credentials, self-hosted CI, or signing/release internals. `README.md` (this repo's own root README) is separate and is **not** published as-is.
+- **Release mirroring** — when a new stable release (not RC/pre-release) is published here, a separate Claws routine downloads the notarized DMG and creates/updates the matching release on the public repo (most-recent-only, no historical backfill). This is what `UpdateChecker` polls via the public repo's `/releases/latest`. Nothing in `.github/workflows/release-tag.yml` performs this mirroring — it happens entirely outside this repo's CI, using credentials the sync routine already holds.
 
 ## API Integration
 

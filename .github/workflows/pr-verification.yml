@@ -28,6 +28,18 @@ jobs:
       with:
         fetch-depth: 0
 
+    - name: Prevent idle sleep
+      # macOS idle sleep tracks user input, not CPU load, so a busy job can't
+      # keep a shared Mac awake by itself (bonkus#1550). keep-awake (dot-files,
+      # symlinked into ~/bin, which is not on the runner service's PATH) holds
+      # a caffeinate assertion bounded to timeout-minutes plus margin; the
+      # always() step at the end releases it. Warn-only so a Mac without
+      # dot-files installed doesn't fail the job. See dot-files
+      # docs/macos-runners.md, "Power / keep-awake".
+      run: |
+        "$HOME/bin/keep-awake" on 70 \
+          || echo "::warning::keep-awake unavailable on $(hostname) — run dot-files/install.sh on this Mac"
+
     - name: Select Xcode
       # Shared convention for the two self-hosted Macs (used identically by
       # TempoStatusBar, namey and bonkus): resolve the newest Xcode installed on
@@ -405,6 +417,11 @@ jobs:
         security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
         rm -f "$RUNNER_TEMP/AuthKey.p8"
 
+    - name: Release idle-sleep assertion
+      if: always()
+      run: |
+        "$HOME/bin/keep-awake" off || true
+
   code-quality:
     name: Code Quality
     runs-on: [self-hosted, macos, tempo]
@@ -414,6 +431,18 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+
+    - name: Prevent idle sleep
+      # macOS idle sleep tracks user input, not CPU load, so a busy job can't
+      # keep a shared Mac awake by itself (bonkus#1550). keep-awake (dot-files,
+      # symlinked into ~/bin, which is not on the runner service's PATH) holds
+      # a caffeinate assertion bounded to timeout-minutes plus margin; the
+      # always() step at the end releases it. Warn-only so a Mac without
+      # dot-files installed doesn't fail the job. See dot-files
+      # docs/macos-runners.md, "Power / keep-awake".
+      run: |
+        "$HOME/bin/keep-awake" on 25 \
+          || echo "::warning::keep-awake unavailable on $(hostname) — run dot-files/install.sh on this Mac"
 
     - name: Select Xcode
       # Shared convention for the two self-hosted Macs (used identically by
@@ -450,7 +479,12 @@ jobs:
     - name: Run SwiftLint
       run: |
         swiftlint lint --reporter github-actions-logging
-        
+
+    - name: Release idle-sleep assertion
+      if: always()
+      run: |
+        "$HOME/bin/keep-awake" off || true
+
   security-scan:
     name: Security Scan
     runs-on: [self-hosted, linux]
