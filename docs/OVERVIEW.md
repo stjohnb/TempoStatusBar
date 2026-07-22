@@ -281,6 +281,10 @@ No environment variables or build-time configuration. There are no hardcoded end
 
 Issue triage, PR labelling, and related repository maintenance are handled by the Claws automation service. See [claws-automation.md](claws-automation.md) for details on how Claws manages this repo.
 
+## Intent Log
+
+A chronological record of the repo owner's stated requirements, decisions, and rationale (extracted from issue/PR bodies and comments) lives in [intent-log.md](intent-log.md). Consult it for *why* behind decisions that aren't obvious from the code alone.
+
 ## CI/CD
 
 Six GitHub Actions workflows — see [ci-cd.md](ci-cd.md) for full details.
@@ -293,6 +297,8 @@ Six GitHub Actions workflows — see [ci-cd.md](ci-cd.md) for full details.
 | `release-tag.yml` | Release events, manual | Release build (with signing), Trivy scan, docs check |
 | `notify-failures.yml` | `workflow_run` on `Main Verification` or `Actions Storage Cleanup` failure | Creates a GitHub issue when a monitored main-branch workflow fails (deduplicates per workflow) |
 | `actions-storage-cleanup.yml` | Push to `main` (primary), daily 05:00 UTC backstop, manual | Purges all GHA caches and artifacts older than 3 days to protect org storage quota |
+
+`.github/dependabot.yml` (not a workflow) enables weekly `github-actions`-ecosystem dependency updates, grouped into a single PR — see [ci-cd.md](ci-cd.md#githubdependabotyml--dependency-updates).
 
 All macOS jobs start with a shared `Select Xcode` step that resolves the newest installed Xcode on the runner and exports a job-scoped `DEVELOPER_DIR` (no `sudo`, no machine-global `xcode-select` — the two Macs are shared with namey and bonkus CI). PR and main workflows use `cancel-in-progress: true`; the release workflow uses `cancel-in-progress: false`. Build/test/quality jobs run on `[self-hosted, macos, tempo]`; utility jobs (security scans, docs checks, PR cleanup, failure notification) run on `[self-hosted, linux]`. Changes are batched and the number of PRs is kept low to reduce queue wait times.
 

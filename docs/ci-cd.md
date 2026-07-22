@@ -156,6 +156,12 @@ This workflow protects the org-shared 2 GB Actions storage quota. These workflow
 
 ---
 
+## `.github/dependabot.yml` — Dependency Updates
+
+Not a workflow — a Dependabot config file, added in #173 in response to a repo-wide "missing dependency-update configuration" alert. Enables version updates for the `github-actions` ecosystem only (`directory: /`); this is a Swift/SwiftUI repo with no `package.json` or SPM manifest, so `github-actions` is the only applicable ecosystem. Weekly schedule (`03:00 Europe/London`), `open-pull-requests-limit: 5`, and a single `all-dependencies` group with pattern `"*"` that collapses all action-version bumps into one grouped PR rather than one PR per action. Dependabot PRs still go through the normal `pr-verification.yml` checks like any other PR.
+
+---
+
 ## Code Signing
 
 All three workflows sign the Release `.app` bundle with a **Developer ID Application** certificate issued by Apple. The Release configuration sets `CODE_SIGN_IDENTITY = "Developer ID Application"`, `CODE_SIGN_STYLE = Manual`, and `ENABLE_HARDENED_RUNTIME = YES`; the team ID is supplied at build time via the `DEVELOPMENT_TEAM` secret. The Debug configuration is signed ad-hoc (`CODE_SIGN_IDENTITY = "-"`) so local developers don't need access to the production cert.
