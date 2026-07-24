@@ -163,6 +163,9 @@ jobs:
     - name: Upload test results
       uses: actions/upload-artifact@v4
       if: always()
+      # Best-effort: org Actions storage quota exhaustion must not fail the
+      # build (#177 — observed as "Artifact storage quota has been hit").
+      continue-on-error: true
       with:
         name: test-results
         path: test-results.xcresult

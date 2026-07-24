@@ -217,7 +217,7 @@ The automatic path passes `respectSkippedVersion: true` so the alert is suppress
 Development happens in this private repo; a public mirror at `stjohnb/TempoStatusBar` is what `UpdateChecker` and end users see. Two independent mechanisms populate it, both external to this repo's own CI:
 
 - **Source snapshot** — a Claws sync routine periodically publishes a squashed, history-free snapshot of this repo to the public one. `README.public.md` (repo root) is the source for that snapshot's `README.md` — the filename never appears in the published output, so its content must never self-reference `README.public.md`, mention syncing/snapshotting, or reference this private source repo, credentials, self-hosted CI, or signing/release internals. `README.md` (this repo's own root README) is separate and is **not** published as-is.
-- **Release mirroring** — when a new stable release (not RC/pre-release) is published here, a separate Claws routine downloads the notarized DMG and creates/updates the matching release on the public repo (most-recent-only, no historical backfill). This is what `UpdateChecker` polls via the public repo's `/releases/latest`. Nothing in `.github/workflows/release-tag.yml` performs this mirroring — it happens entirely outside this repo's CI, using credentials the sync routine already holds.
+- **Release mirroring** — when a new stable release (not RC/pre-release) is published here, a separate Claws routine fetches the notarized DMG and creates/updates the matching release on the public repo (most-recent-only, no historical backfill). This is what `UpdateChecker` polls via the public repo's `/releases/latest`. Nothing in `.github/workflows/release-tag.yml` performs this mirroring — it happens entirely outside this repo's CI, using credentials the sync routine already holds. **Since #177 the DMG is no longer attached to this repo's GitHub Release as an asset** — `release-tag.yml` publishes it to S3 (`https://tempo-statusbar-releases.s3.us-east-1.amazonaws.com/releases/TempoStatusBarApp-<version>.dmg`) and writes that link into the release body. The external mirror routine must download the DMG from the S3 URL (or the release-body link), not from a release asset — coordinating that change in the routine is outside this repo.
 
 ## API Integration
 
@@ -287,14 +287,15 @@ A chronological record of the repo owner's stated requirements, decisions, and r
 
 ## CI/CD
 
-Six GitHub Actions workflows — see [ci-cd.md](ci-cd.md) for full details.
+Seven GitHub Actions workflows — see [ci-cd.md](ci-cd.md) for full details. DMGs are stored in S3 (bucket `tempo-statusbar-releases`), uploaded via GitHub OIDC (`AWS_ROLE_ARN` secret) — not as GitHub Release assets (#177).
 
 | Workflow | Trigger | Key jobs |
 |---|---|---|
-| `pr-verification.yml` | PRs to `main` | Build+test (with signing), SwiftLint, Trivy scan, per-PR pre-release publish, PR comment |
-| `pr-cleanup.yml` | PR `closed` | Deletes the per-PR pre-release |
+| `pr-verification.yml` | PRs to `main` | Build+test (with signing), SwiftLint, Trivy scan, DMG upload to `s3://…/pr/<N>/`, PR comment |
+| `pr-cleanup.yml` | PR `closed` | Deletes the PR's `pr/<N>/` prefix from S3 |
 | `main-verification.yml` | Push to `main`, manual | Build (with signing), Trivy scan, docs check |
-| `release-tag.yml` | Release events, manual | Release build (with signing), Trivy scan, docs check |
+| `release-tag.yml` | Release events, manual | Release build (with signing), DMG upload to `s3://…/releases/`, download link in release notes, Trivy scan, docs check |
+| `s3-bootstrap.yml` | Manual only | One-time idempotent provisioning of the S3 bucket + OIDC role (uses temporary bootstrap credentials, then decommissioned) |
 | `notify-failures.yml` | `workflow_run` on `Main Verification` or `Actions Storage Cleanup` failure | Creates a GitHub issue when a monitored main-branch workflow fails (deduplicates per workflow) |
 | `actions-storage-cleanup.yml` | Push to `main` (primary), daily 05:00 UTC backstop, manual | Purges all GHA caches and artifacts older than 3 days to protect org storage quota |
 

@@ -2,13 +2,14 @@
 
 ## Workflow Files
 
-All workflows live in `.github/workflows/`. Six workflows cover the full development lifecycle.
+All workflows live in `.github/workflows/`. Seven workflows cover the full development lifecycle.
 
 ### Common Settings (all workflows)
 
 - **Runners:** Self-hosted `[self-hosted, macos, tempo]` for build/test/quality jobs; `[self-hosted, linux]` for security scans, documentation checks, PR cleanup, and failure notification. The `tempo` label pins these jobs to the Mac that does **not** run the real TempoStatusBarApp: signing jobs put a temp keychain into the runner user's keychain search list, and on a Mac where the real app is polling, that triggers keychain-unlock dialogs in the user's session. Machine-level documentation for the two shared Macs — inventory, runner-label semantics, registration and Xcode-install runbooks — is centralised in the dot-files repo: [docs/macos-runners.md](https://github.com/St-John-Software/dot-files/blob/main/docs/macos-runners.md).
 - **Xcode:** every macOS job starts with a shared `Select Xcode` step that finds the newest non-beta Xcode under `/Applications` and exports a **job-scoped `DEVELOPER_DIR`**. It deliberately does *not* use `maxim-lobanov/setup-xcode` or `xcode-select`: those change the machine-global active Xcode via `sudo`, and the two Macs are shared with namey and bonkus CI (which use the same step). No job may mutate machine-global state.
 - **Concurrency:** PR and main workflows use `cancel-in-progress: true` to cancel redundant runs; the release workflow uses `cancel-in-progress: false` to avoid interrupting in-flight release builds
+- **DMG storage — S3 via OIDC (#177):** built DMGs are stored in the `tempo-statusbar-releases` S3 bucket (job env `S3_BUCKET`/`S3_REGION`/`DOWNLOAD_BASE`), not as GitHub Release assets — GitHub storage/bandwidth limits were being hit. Jobs authenticate with GitHub OIDC: `permissions: id-token: write` plus `aws-actions/configure-aws-credentials` (SHA-pinned) assuming the IAM role in the `AWS_ROLE_ARN` secret; no static AWS credentials are stored. Fork PRs skip all AWS steps (no OIDC access to the role). Stable releases land at `releases/TempoStatusBarApp-<version>.dmg` (plus a `TempoStatusBarApp-latest.dmg` copy); PR builds at `pr/<N>/TempoStatusBarApp-<version>.dmg`. Both prefixes are public-read over HTTPS. One-time provisioning is handled by [`s3-bootstrap.yml`](#s3-bootstrapyml--s3-bootstrap) (see below).
 
 ---
 
@@ -20,7 +21,7 @@ All workflows live in `.github/workflows/`. Six workflows cover the full develop
 
 ### `build-and-test`
 
-Permissions: `contents: write`, `pull-requests: write`
+Permissions: `contents: read`, `pull-requests: write`, `id-token: write`
 
 Steps:
 1. Checkout + Xcode setup
@@ -28,16 +29,15 @@ Steps:
 3. **Import signing certificate** (see [Code Signing](#code-signing) below)
 4. Debug build (`xcodebuild … -configuration Debug`)
 5. Release build (`xcodebuild … -configuration Release`)
-6. Unit tests via `./run_tests.sh`, with `TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS: "1"` set on the step (see [Key Design Decisions](#key-design-decisions)) — uploads `test-results.xcresult` as artifact (3-day retention)
+6. Unit tests via `./run_tests.sh`, with `TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS: "1"` set on the step (see [Key Design Decisions](#key-design-decisions)) — uploads `test-results.xcresult` as artifact (3-day retention, `continue-on-error: true` in both PR and main workflows so org storage-quota exhaustion cannot fail the build)
 7. Archive (`xcodebuild … archive -archivePath ./build/TempoStatusBarApp.xcarchive`)
 8. Verify `.app` bundle structure
 9. **Verify code signature** — confirms `Authority=TempoStatusBar Signing` is present
 10. Create DMG with `hdiutil create`
 11. **Sign and notarize DMG** (skipped on fork PRs) — sign the DMG with the Developer ID identity, submit via `xcrun notarytool`, staple, and re-verify with `spctl --assess`
-12. Delete any previous `pr-<N>` pre-release for this PR (`gh release delete --cleanup-tag`, ignored if absent)
-13. Publish DMG as a pre-release tagged `pr-<N>` via `softprops/action-gh-release` (raw `.dmg`, no zip wrapping)
-14. **Post or update PR comment** with the release-page download link (see below)
-15. **Clean up signing keychain + notarization key** (post-run step)
+12. **Upload DMG to S3** (skipped on fork PRs) — `command -v aws || brew install awscli`, assume the OIDC role via `aws-actions/configure-aws-credentials`, then `aws s3 cp` to `s3://<bucket>/pr/<N>/TempoStatusBarApp-<version>.dmg`
+13. **Post or update PR comment** with the S3 download link (see below)
+14. **Clean up signing keychain + notarization key** (post-run step)
 
 ### `code-quality`
 
@@ -55,11 +55,11 @@ Runs on `[self-hosted, linux]`. Steps: Checkout + `aquasecurity/trivy-action@mas
 
 ## PR Build Comment
 
-After the DMG is published to the per-PR pre-release, an `actions/github-script@v7` step posts (or updates) a comment on the PR. This only runs for non-fork PRs (`github.event.pull_request.head.repo.full_name == github.repository`) because fork PRs receive a read-only token and cannot write comments or releases.
+After the DMG is uploaded to S3, an `actions/github-script@v7` step posts (or updates) a comment on the PR. This only runs for non-fork PRs (`github.event.pull_request.head.repo.full_name == github.repository`) because fork PRs receive a read-only token and cannot write comments (nor assume the OIDC role for the upload).
 
 **Comment identity:** An HTML marker `<!-- pr-build-comment -->` is embedded in the comment body. The step paginates all PR comments, finds the existing marker comment if present, and updates it rather than creating a new one. This ensures exactly one build comment per PR regardless of how many pushes are made.
 
-**Download link:** The comment links to a deterministic release-asset URL of the form `<server>/<owner>/<repo>/releases/download/pr-<N>/TempoStatusBarApp-<version>.dmg`. No API lookup is required because the tag and filename are both known statically inside the workflow.
+**Download link:** The comment links to a deterministic S3 URL of the form `<DOWNLOAD_BASE>/pr/<N>/TempoStatusBarApp-<version>.dmg`. No API lookup is required because the prefix and filename are both known statically inside the workflow.
 
 The step uses `continue-on-error: true` so a comment failure doesn't fail the build.
 
@@ -87,11 +87,11 @@ The step uses `continue-on-error: true` so a comment failure doesn't fail the bu
 
 | Job | Runner | Description |
 |---|---|---|
-| `release-build` | `[self-hosted, macos, tempo]` | Import signing cert → Release build + Archive (both with `MARKETING_VERSION=<tag>` override) + verify signature + DMG (named `TempoStatusBarApp-<version>.dmg`) → attach raw DMG to the GitHub Release page → clean up keychain |
+| `release-build` | `[self-hosted, macos, tempo]` | Import signing cert → Release build + Archive (both with `MARKETING_VERSION=<tag>` override) + verify signature + DMG (named `TempoStatusBarApp-<version>.dmg`) → upload DMG to S3 + write download link into the release notes → clean up keychain |
 | `security-check` | `[self-hosted, linux]` | Trivy scan |
 | `documentation-check` | `[self-hosted, linux]` | Docs presence check |
 
-The `release-build` job uploads the DMG to the GitHub Release via `softprops/action-gh-release`, pinned to a full commit SHA (`3bb12739c298aeb8a4eeaf626c5b8d85266b0e65`, tag `v2.6.2`). SHA pinning is required here — this action writes to the public release page, so mutable refs (e.g. `@v2`, `@master`) are not acceptable. The upload step is gated with `if: github.event_name == 'release' && github.event.action == 'created'` so that manual `workflow_dispatch` runs (used for build testing) skip the upload and do not fail due to the absence of an associated release.
+The `release-build` job uploads the DMG to `s3://<bucket>/releases/TempoStatusBarApp-<version>.dmg` (and copies it to `releases/TempoStatusBarApp-latest.dmg`) using the OIDC role, then appends a `**Download:** [<dmg>](<S3 URL>)` line to the GitHub Release body via `gh release edit` so the release page remains a discoverable download point. The release-notes edit uses `GITHUB_TOKEN`, and events caused by `GITHUB_TOKEN` never start new workflow runs — so the resulting `release: edited` event does not re-trigger this workflow. All AWS/upload steps are gated with `if: github.event_name == 'release' && github.event.action == 'created'` so that manual `workflow_dispatch` runs (used for build testing) skip the upload and do not fail due to the absence of an associated release.
 
 ### Release name / tag consistency check
 
@@ -103,9 +103,24 @@ The first step of `release-build` asserts that `github.event.release.tag_name` e
 
 **Trigger:** `pull_request` with `types: [closed]` (fires on both merge and unmerged close)
 
-Runs on `[self-hosted, linux]`. Single step: `gh release delete pr-<N> --yes --cleanup-tag` (with `|| true` so a missing release is non-fatal). Skipped for fork PRs.
+Runs on `[self-hosted, linux]`. Installs the AWS CLI if missing (official installer, `sudo` is acceptable on the Linux runner), assumes the OIDC role, then `aws s3 rm s3://<bucket>/pr/<N>/ --recursive` (with `|| true` so a missing prefix is non-fatal). Skipped for fork PRs — they never uploaded.
 
-This workflow exists so per-PR pre-releases do not accumulate on the Releases page indefinitely.
+This workflow exists so per-PR DMG builds do not accumulate in the bucket indefinitely. As a backstop for cleanup runs that never fire, the bucket has a lifecycle rule (created by `s3-bootstrap.yml`) that expires `pr/`-prefixed objects after 30 days.
+
+---
+
+## `s3-bootstrap.yml` — S3 Bootstrap
+
+**Trigger:** `workflow_dispatch` only, with inputs `bucket` (default `tempo-statusbar-releases`), `region` (default `us-east-1`), and `role_name` (default `tempo-statusbar-github-actions`)
+
+One-time — but idempotent, safe to re-run — provisioning of the AWS resources the release/PR workflows depend on. Runs on `[self-hosted, linux]` using **temporary static credentials** read from the `AWS_BOOTSTRAP_ACCESS_KEY_ID` / `AWS_BOOTSTRAP_SECRET_ACCESS_KEY` secrets (it fails fast with a clear error if they are unset). It creates:
+
+1. The S3 bucket, with a public-access-block configuration that blocks ACLs but permits a bucket policy, and a bucket policy granting anonymous `s3:GetObject` on `releases/*` and `pr/*` only
+2. A lifecycle rule expiring `pr/`-prefixed objects after 30 days (backstop for missed PR-close cleanups)
+3. The `token.actions.githubusercontent.com` OIDC identity provider in the account (skipped if it already exists — it is account-global and may be shared with other repos)
+4. An IAM role whose trust policy is scoped to `repo:St-John-Software/TempoStatusBar:*` (audience `sts.amazonaws.com`), carrying an inline policy allowing only `s3:PutObject`/`GetObject`/`DeleteObject` on the bucket's objects and `s3:ListBucket` on the bucket
+
+The final step prints the role ARN to the job summary along with the decommissioning checklist: store the ARN as the `AWS_ROLE_ARN` secret, revoke the temporary access key in IAM, and delete both bootstrap secrets. After that, no static AWS credentials exist anywhere — all recurring workflows authenticate via OIDC.
 
 ---
 
@@ -179,6 +194,7 @@ The release and PR workflows additionally **notarize and staple** the DMG so Gat
 | `AC_API_KEY_ID` | App Store Connect API Key ID |
 | `AC_API_ISSUER_ID` | App Store Connect API Issuer ID |
 | `AC_API_KEY_P8_BASE64` | Base64-encoded `.p8` private key downloaded when the API key was created |
+| `AWS_ROLE_ARN` | ARN of the IAM role (created by `s3-bootstrap.yml`) that release/PR/cleanup jobs assume via GitHub OIDC for S3 access |
 
 **Signing process (all workflows):**
 
@@ -210,15 +226,15 @@ The release and PR workflows additionally **notarize and staple** the DMG so Gat
 - **`Select Xcode` via job-scoped `DEVELOPER_DIR`** — resolves the newest non-beta Xcode installed on whichever self-hosted runner picks up the job. The two self-hosted Macs do not necessarily have the same Xcode installed, so pinning a single version (e.g. `'26.x'`) would fail on any runner lacking it. Exporting `DEVELOPER_DIR` per job (instead of `sudo xcode-select` / `setup-xcode`) means the choice never leaks outside the job — required because the same two Macs also serve namey and bonkus iOS CI.
 - **Shared-runner contract** — the two self-hosted Macs are shared by TempoStatusBar, namey, and bonkus CI. Every macOS job in all three repos follows the same rules: no `sudo`; never mutate machine-global state (`xcode-select`, system keychain search order, Homebrew upgrades); guard tool installs with `command -v <tool> || <user-scoped install>`; keep signing material in per-job temp keychains that are deleted in an `always()` cleanup step; set `timeout-minutes` on every macOS job so a wedged job can't starve the two-runner pool; and hold a job-scoped `caffeinate` sleep assertion — macOS idle sleep tracks user input, not CPU load, so a busy build can't keep a Mac awake by itself (bonkus#1550). Every macOS job here does this via `~/bin/keep-awake` from the dot-files repo (`keep-awake on <minutes>` right after checkout, `keep-awake off` in an `always()` final step; warn-only if the Mac lacks dot-files — see dot-files `docs/macos-runners.md`, "Power / keep-awake").
   - **Caveat — signing jobs mutate the user keychain state.** The signing step is the one sanctioned exception to "never mutate machine-global state": it replaces the user's keychain search list with only the temp keychain (`security list-keychains -d user -s "$KEYCHAIN_PATH"`) and sets it as the user default (`security default-keychain -d user`), because the runner user has no GUI login session and `codesign` otherwise fails with `errSecInternalComponent` when the signing keychain is only in the search list. Both mutations are reverted in the `always()` "Clean up signing keychain" step (restore the search list and default to `login.keychain-db` alone, delete the temp keychain). **Residual risk:** because the search list is fully replaced rather than prepended, any other keychain that happened to be in the user's search list before the job ran (potentially added by a concurrent namey/bonkus job on these same two shared Macs) is dropped for the job's duration, and if that cleanup never runs (runner disconnects mid-job, process killed out-of-band, post-steps skipped), the shared Mac's user search list and default keychain are left pointing at an orphaned temp keychain, which can break `security`/`codesign` in the next job from *any* of the three repos. A signing job on this repo self-heals on its next run (it re-sets the search list and default), but non-signing jobs and other repos do not — if that state is observed, reset it manually with `security list-keychains -d user -s login.keychain-db` and `security default-keychain -d user -s login.keychain-db`. A future hardening is a defensive reset as the first step of every macOS job; changing the signing flow that way needs coordination across all three repos first (see "Do not change the signing flow without coordinating").
-- **PR DMG distribution via per-PR pre-release** — DMGs for PR builds are published via `softprops/action-gh-release` to a pre-release tagged `pr-<N>`, NOT via `actions/upload-artifact`. The artifact action always wraps its payload in a `.zip`; macOS treats a DMG extracted from a downloaded zip as a different quarantine origin than a DMG downloaded raw from the Releases page, causing Keychain re-prompts even with identical signing identities. Publishing via the same action used for tagged releases keeps the quarantine origin consistent. Per-PR pre-releases are cleaned up automatically by `pr-cleanup.yml` when the PR closes.
-- **`contents: write` on `build-and-test`** — The PR-build-publishing step uses `softprops/action-gh-release` to create/update a per-PR pre-release, which writes to the repo's Releases. The job declares its own `permissions` block, which replaces the workflow-level permissions for that job — so `contents: write` must be listed explicitly on the job, not just at the workflow level. The workflow-level `contents` permission stays at `read`.
+- **DMG distribution via S3, not GitHub (#177)** — DMGs for both PR and tagged-release builds are uploaded to S3 with `aws s3 cp`, NOT attached as release assets (GitHub storage/bandwidth limits were being hit) and NOT via `actions/upload-artifact`. The artifact action always wraps its payload in a `.zip`; macOS treats a DMG extracted from a downloaded zip as a different quarantine origin than a DMG downloaded raw over HTTPS, causing Keychain re-prompts even with identical signing identities — the S3 links serve the raw `.dmg`, keeping the quarantine origin consistent. PR uploads are cleaned up by `pr-cleanup.yml` when the PR closes (plus a 30-day lifecycle backstop).
+- **OIDC over static AWS keys** — CI never holds long-lived AWS credentials. Jobs that touch S3 declare `id-token: write` and assume the `AWS_ROLE_ARN` role via `aws-actions/configure-aws-credentials`; the role's trust policy only accepts tokens whose subject matches `repo:St-John-Software/TempoStatusBar:*`, and its permissions are limited to object read/write/delete in the release bucket. The `build-and-test` job's own `permissions` block replaces the workflow-level permissions, so `id-token: write` must be listed explicitly on the job; `contents` dropped back to `read` there when release publishing moved to S3.
 - **`cancel-in-progress`** — `true` for PR and main workflows to prevent stale runs from blocking the queue; `false` for the release workflow so in-flight release builds are not interrupted.
 - **DMG naming** — PR builds: `TempoStatusBarApp-pr-<N>-<sha>`; release builds: `TempoStatusBarApp-<version>`.
-- **Artifact retention** — `test-results` (xcresult) artifacts: 3 days for both PRs and main. PR build DMGs live as assets on a per-PR pre-release and are deleted when the PR closes (`pr-cleanup.yml`). Tagged-release DMGs live on the GitHub Release page and do not expire.
-- **Fork PRs** — both the pre-release publish step and the PR comment step are skipped for forks (read-only `GITHUB_TOKEN`). Fork contributors who need to test their build should either rebase onto the upstream repo or build locally with Xcode.
+- **Artifact retention** — `test-results` (xcresult) artifacts: 3 days for both PRs and main. PR build DMGs live under `s3://<bucket>/pr/<N>/` and are deleted when the PR closes (`pr-cleanup.yml`; 30-day lifecycle backstop). Tagged-release DMGs live under `s3://<bucket>/releases/` and do not expire.
+- **Fork PRs** — the S3 upload steps and the PR comment step are skipped for forks (read-only `GITHUB_TOKEN`, and no OIDC access to the AWS role). Fork contributors who need to test their build should either rebase onto the upstream repo or build locally with Xcode.
 - **SwiftLint** — installed at CI runtime via `brew`; configuration in `.swiftlint.yml`.
 - **Trivy action** — pinned to `@master` (mutable ref); consider pinning to a fixed tag in a future cleanup. GHA caching is explicitly disabled (`cache: 'false'`) on all three Trivy steps — the self-hosted Linux runners already persist the Trivy DB and binary on local disk between runs, so GHA cache is redundant and would otherwise accumulate ~112 MB of org-shared Actions storage quota (Trivy DB + binary cached per run). Any caches that do accumulate are purged daily by `actions-storage-cleanup.yml`.
-- **SHA pinning for release-publishing actions** — `softprops/action-gh-release` is pinned to a full commit SHA rather than a tag or moving ref. Actions that write to the public release page carry higher supply-chain risk if compromised; use full SHA pins for them. When updating the pin, verify the SHA with `gh api repos/softprops/action-gh-release/git/refs/tags/<version>` before committing.
+- **SHA pinning for credential/publishing actions** — `aws-actions/configure-aws-credentials` is pinned to a full commit SHA (`7474bc4690e29a8392af63c5b98e7449536d5c3a`, tag `v4.3.1`) rather than a tag or moving ref. Actions that mint cloud credentials or write to public distribution points carry higher supply-chain risk if compromised; use full SHA pins for them. When updating the pin, verify the SHA with `gh api repos/aws-actions/configure-aws-credentials/git/refs/tags/<version>` before committing.
 - **PR comment body construction** — the `github-script` step in `pr-verification.yml` builds the PR comment using an array joined with `\n` rather than a template literal. Template literals with unindented multi-line content break YAML block scalars; the array approach keeps every JavaScript line at consistent indentation within the `script: |` block and avoids YAML parse errors. The download URL is constructed deterministically from the PR number and version string — no `listWorkflowRunArtifacts` API call is needed.
 - **`MARKETING_VERSION` CLI override** — Release and PR `xcodebuild` invocations pass `MARKETING_VERSION=<tag-version>` on the command line. This overrides the value hardcoded in `project.pbxproj` and ensures `appVersion`, `CFBundleShortVersionString`, and the About alert all report the release tag (e.g. `1.3.0`), not the stale project-file value (#105).
 - **Developer ID signing with Hardened Runtime** — Release builds are signed with an Apple-issued Developer ID Application certificate and built with `ENABLE_HARDENED_RUNTIME = YES`. The cert is imported into a temporary keychain that is deleted at the end of each run — it is never written to the runner's permanent login keychain. Debug builds use ad-hoc signing (`CODE_SIGN_IDENTITY = "-"`) so local development doesn't depend on the production cert. The Apple **Developer ID Certification Authority** intermediate is also imported into the temp keychain so `codesign` can build the full chain; without it Xcode 26 runners fail with `errSecInternalComponent` (#133).

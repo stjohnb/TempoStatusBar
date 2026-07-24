@@ -247,3 +247,38 @@ current.
   in an `if: always()` step. Deliberately warn-only/non-blocking so a
   runner without the keep-awake tooling installed just degrades to the
   old behavior instead of failing builds.
+
+### 2026-07-23
+
+- GitHub storage/bandwidth limits were being hit hard enough that DMG
+  distribution had to move off GitHub entirely (#177): @stjohnb's
+  original ask was simply "stop using it for storage and use S3
+  instead," explicitly modeled on the OIDC pattern already used by the
+  `bstjohn-blog` and `vr-rooms` repos. A concrete symptom of the
+  underlying quota pressure surfaced in the same window: issue #175's
+  `Main Verification` failure was traced to the `Upload test results`
+  artifact step hitting "Artifact storage quota has been hit" on an
+  otherwise-green build — not a real test/build failure. That artifact
+  upload was made `continue-on-error: true` (kept on `if: always()`,
+  not switched to failure-only as an earlier draft plan had proposed)
+  so a storage-quota hit can never again mask a green build.
+- @stjohnb deliberately split the S3 migration into two sequential PRs
+  to resolve a bootstrap chicken-and-egg problem: a `workflow_dispatch`
+  workflow only appears in the Actions UI once it's merged to `main`,
+  and the migrated release/PR workflows need the `AWS_ROLE_ARN` OIDC
+  role to already exist for their own CI to go green. #178 (one-time
+  idempotent `s3-bootstrap.yml`, using temporary static
+  `AWS_BOOTSTRAP_*` credentials that are revoked immediately after the
+  runbook completes) had to merge and actually run — producing the
+  bucket, OIDC provider, and scoped IAM role — before #179 (the actual
+  `release-tag.yml`/`pr-verification.yml`/`pr-cleanup.yml` migration to
+  S3 uploads via OIDC) could be opened. Explicit instruction: do not
+  collapse these into one PR even though they land almost together.
+- Stated follow-up, explicitly out of scope for this repo's own CI: the
+  external Claws release-mirroring routine (which republishes stable
+  releases to the public `stjohnb/TempoStatusBar` mirror — see the
+  "Public Snapshot" section of OVERVIEW.md, originally established in
+  #159/2026-07-08) must be updated to fetch the DMG from the S3 link in
+  the release body instead of from a GitHub release asset, since #179
+  stopped attaching DMGs as release assets. That mirror-routine change
+  is tracked outside this repo and does not block anything here.

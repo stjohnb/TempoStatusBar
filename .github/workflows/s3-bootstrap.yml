@@ -1,0 +1,221 @@
+name: S3 Bootstrap
+
+# One-time (but idempotent, safe to re-run) provisioning of the AWS resources
+# that the release/PR workflows need for S3 DMG storage (#177):
+#
+#   1. S3 bucket with public-read on releases/* and pr/* prefixes
+#   2. GitHub OIDC identity provider in the AWS account (if missing)
+#   3. IAM role trust-scoped to this repo, with S3 access to the bucket only
+#
+# Bootstrap credentials: create a temporary IAM user access key with rights to
+# manage S3/IAM, store it as the repo secrets AWS_BOOTSTRAP_ACCESS_KEY_ID and
+# AWS_BOOTSTRAP_SECRET_ACCESS_KEY, run this workflow once, then:
+#
+#   - store the printed role ARN as the AWS_ROLE_ARN repo secret
+#   - revoke the temporary access key and delete both bootstrap secrets
+#
+# Everything after bootstrap authenticates via OIDC (id-token: write +
+# aws-actions/configure-aws-credentials assuming AWS_ROLE_ARN) — no static
+# AWS credentials remain anywhere.
+
+# Triggers removed for the public snapshot — this workflow is intentionally disabled.
+# See the private source repository for the active version.
+on:
+  workflow_dispatch:
+permissions: {}
+
+concurrency:
+  group: s3-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    name: Provision bucket + OIDC role
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 15
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_BOOTSTRAP_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_BOOTSTRAP_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ inputs.region }}
+      BUCKET: ${{ inputs.bucket }}
+      REGION: ${{ inputs.region }}
+      ROLE_NAME: ${{ inputs.role_name }}
+    steps:
+      - name: Check bootstrap credentials are configured
+        run: |
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "::error::AWS_BOOTSTRAP_ACCESS_KEY_ID / AWS_BOOTSTRAP_SECRET_ACCESS_KEY secrets are not set."
+            echo "Create a temporary IAM access key with S3+IAM admin rights and store it in those secrets first."
+            exit 1
+          fi
+
+      - name: Ensure AWS CLI
+        run: |
+          command -v aws >/dev/null 2>&1 || {
+            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+            unzip -qo /tmp/awscliv2.zip -d /tmp && sudo /tmp/aws/install
+            rm -rf /tmp/awscliv2.zip /tmp/aws
+          }
+          aws --version
+
+      - name: Create S3 bucket
+        run: |
+          set -euo pipefail
+          if aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+            echo "Bucket $BUCKET already exists — skipping creation."
+          else
+            # us-east-1 rejects an explicit LocationConstraint; every other
+            # region requires one.
+            if [ "$REGION" = "us-east-1" ]; then
+              aws s3api create-bucket --bucket "$BUCKET"
+            else
+              aws s3api create-bucket --bucket "$BUCKET" \
+                --create-bucket-configuration "LocationConstraint=$REGION"
+            fi
+            echo "Created bucket $BUCKET in $REGION."
+          fi
+
+      - name: Configure public read access for release/PR objects
+        run: |
+          set -euo pipefail
+          # Allow a public bucket policy (ACLs stay blocked; access is granted
+          # by policy on the two download prefixes only).
+          aws s3api put-public-access-block --bucket "$BUCKET" \
+            --public-access-block-configuration \
+            'BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false'
+
+          aws s3api put-bucket-policy --bucket "$BUCKET" --policy "$(cat <<EOF
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Sid": "PublicReadDownloads",
+                "Effect": "Allow",
+                "Principal": "*",
+                "Action": "s3:GetObject",
+                "Resource": [
+                  "arn:aws:s3:::$BUCKET/releases/*",
+                  "arn:aws:s3:::$BUCKET/pr/*"
+                ]
+              }
+            ]
+          }
+          EOF
+          )"
+
+      - name: Add lifecycle expiry for PR builds
+        # pr-cleanup.yml deletes pr/<N>/ when a PR closes; this is a backstop
+        # for uploads orphaned by a cleanup run that never fired.
+        run: |
+          set -euo pipefail
+          aws s3api put-bucket-lifecycle-configuration --bucket "$BUCKET" \
+            --lifecycle-configuration "$(cat <<'EOF'
+          {
+            "Rules": [
+              {
+                "ID": "expire-pr-builds",
+                "Status": "Enabled",
+                "Filter": { "Prefix": "pr/" },
+                "Expiration": { "Days": 30 }
+              }
+            ]
+          }
+          EOF
+          )"
+
+      - name: Ensure GitHub OIDC identity provider
+        run: |
+          set -euo pipefail
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          PROVIDER_ARN="arn:aws:iam::$ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
+          if aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$PROVIDER_ARN" >/dev/null 2>&1; then
+            echo "OIDC provider already exists: $PROVIDER_ARN"
+          else
+            # AWS validates GitHub's cert against its own trusted CA list and
+            # ignores the thumbprint, but older CLI/API versions still require
+            # the parameter — this is GitHub's well-known root thumbprint.
+            aws iam create-open-id-connect-provider \
+              --url "https://token.actions.githubusercontent.com" \
+              --client-id-list "sts.amazonaws.com" \
+              --thumbprint-list "6938fd4d98bab03faadb97b34396831e3780aea1"
+            echo "Created OIDC provider: $PROVIDER_ARN"
+          fi
+          echo "PROVIDER_ARN=$PROVIDER_ARN" >> "$GITHUB_ENV"
+
+      - name: Create/update IAM role for this repo
+        run: |
+          set -euo pipefail
+          TRUST_POLICY=$(cat <<EOF
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Principal": { "Federated": "$PROVIDER_ARN" },
+                "Action": "sts:AssumeRoleWithWebIdentity",
+                "Condition": {
+                  "StringEquals": {
+                    "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+                  },
+                  "StringLike": {
+                    "token.actions.githubusercontent.com:sub": "repo:${{ github.repository }}:*"
+                  }
+                }
+              }
+            ]
+          }
+          EOF
+          )
+          if aws iam get-role --role-name "$ROLE_NAME" >/dev/null 2>&1; then
+            echo "Role $ROLE_NAME already exists — refreshing trust policy."
+            aws iam update-assume-role-policy --role-name "$ROLE_NAME" \
+              --policy-document "$TRUST_POLICY"
+          else
+            aws iam create-role --role-name "$ROLE_NAME" \
+              --description "GitHub Actions OIDC role for ${{ github.repository }} S3 releases (#177)" \
+              --max-session-duration 3600 \
+              --assume-role-policy-document "$TRUST_POLICY"
+            echo "Created role $ROLE_NAME."
+          fi
+
+          aws iam put-role-policy --role-name "$ROLE_NAME" \
+            --policy-name "s3-$BUCKET" \
+            --policy-document "$(cat <<EOF
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+                "Resource": "arn:aws:s3:::$BUCKET/*"
+              },
+              {
+                "Effect": "Allow",
+                "Action": "s3:ListBucket",
+                "Resource": "arn:aws:s3:::$BUCKET"
+              }
+            ]
+          }
+          EOF
+          )"
+
+      - name: Print next steps
+        run: |
+          set -euo pipefail
+          ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query Role.Arn --output text)
+          {
+            echo "## S3 bootstrap complete"
+            echo ""
+            echo "| Resource | Value |"
+            echo "|---|---|"
+            echo "| Bucket | \`s3://$BUCKET\` ($REGION) |"
+            echo "| Download base | \`https://$BUCKET.s3.$REGION.amazonaws.com\` |"
+            echo "| Role ARN | \`$ROLE_ARN\` |"
+            echo ""
+            echo "### Finish the switch to OIDC"
+            echo ""
+            echo "1. Store the role ARN as the repo secret \`AWS_ROLE_ARN\`."
+            echo "2. Revoke the temporary bootstrap access key in IAM."
+            echo "3. Delete the \`AWS_BOOTSTRAP_ACCESS_KEY_ID\` and \`AWS_BOOTSTRAP_SECRET_ACCESS_KEY\` repo secrets."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Role ARN: $ROLE_ARN"
