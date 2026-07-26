@@ -282,3 +282,24 @@ current.
   the release body instead of from a GitHub release asset, since #179
   stopped attaching DMGs as release assets. That mirror-routine change
   is tracked outside this repo and does not block anything here.
+
+### 2026-07-25
+
+- Dependabot's first grouped `github-actions` bump (#180, enabled by
+  the dependabot.yml config added in #173/2026-05-19) failed CI in 15
+  seconds: Dependabot-triggered workflow runs read the **Dependabot
+  secrets store**, not the repo's own Actions secrets, so
+  `SIGNING_CERT_P12_BASE64` was empty and `security import` died on
+  an empty p12 before any real build work ran (#182). Fix philosophy
+  stated explicitly: keep as much of PR verification running as
+  possible for Dependabot PRs, skipping only the steps that genuinely
+  need the missing secrets (cert import, Developer ID authority
+  check, DMG signing/notarization, S3 upload/PR comment) rather than
+  skipping the whole job — Debug/Release builds, archive, and DMG
+  creation still run, ad-hoc signed. Explicitly stated: human and
+  fork PR behavior must stay unchanged — the existing same-repo guard
+  is extended, not replaced.
+  Follow-up noted but not yet actioned as of this entry: #180's bumps
+  to `checkout@v7`/`upload-artifact@v7`/`github-script@v9` need
+  Node 24-capable runners on the two shared self-hosted Macs — worth
+  verifying runner versions, not yet confirmed.

@@ -21,7 +21,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     - name: Prevent idle sleep
       # macOS idle sleep tracks user input, not CPU load, so a busy job can't
@@ -161,7 +161,7 @@ jobs:
         echo "✅ Unit tests completed successfully"
 
     - name: Upload test results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       # Best-effort: org Actions storage quota exhaustion must not fail the
       # build (#177 — observed as "Artifact storage quota has been hit").
@@ -252,7 +252,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@master
@@ -264,7 +264,7 @@ jobs:
         cache: 'false'
 
     - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@v4
       if: always()
       with:
         sarif_file: 'trivy-results.sarif'
@@ -276,7 +276,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
         
     - name: Check for documentation
       run: |

@@ -28,10 +28,18 @@ jobs:
       S3_BUCKET: tempo-statusbar-releases
       S3_REGION: us-east-1
       DOWNLOAD_BASE: https://tempo-statusbar-releases.s3.us-east-1.amazonaws.com
+      # 'true' when Dependabot triggered this run. Dependabot-triggered
+      # workflows read the Dependabot secrets store, not the repo's Actions
+      # secrets, so the signing cert and AWS role are unavailable (#180).
+      # Build/test/archive/DMG still run — Release builds ad-hoc sign in
+      # place of the Developer ID identity — while cert import, the
+      # Developer ID authority check, DMG signing/notarization, and the S3
+      # upload/PR comment are skipped.
+      IS_DEPENDABOT: ${{ github.actor == 'dependabot[bot]' }}
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
@@ -82,6 +90,9 @@ jobs:
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
     - name: Import signing certificate
+      # No repo secrets on Dependabot runs (see IS_DEPENDABOT above) — the
+      # empty cert would fail to import.
+      if: env.IS_DEPENDABOT != 'true'
       env:
         SIGNING_CERT_P12_BASE64: ${{ secrets.SIGNING_CERT_P12_BASE64 }}
         SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
@@ -170,12 +181,19 @@ jobs:
       env:
         DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
       run: |
+        # Dependabot runs have no Developer ID cert — ad-hoc sign instead
+        # (the Debug config already ad-hoc signs via CODE_SIGN_IDENTITY=-).
+        SIGNING=()
+        if [ "$IS_DEPENDABOT" = "true" ]; then
+          SIGNING=("CODE_SIGN_IDENTITY=-")
+        fi
         xcodebuild -project TempoStatusBarApp.xcodeproj \
           -scheme TempoStatusBarApp \
           -configuration Release \
           -destination 'platform=macOS' \
           DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
           MARKETING_VERSION="${{ steps.version.outputs.version }}" \
+          "${SIGNING[@]}" \
           build
 
     - name: Run unit tests
@@ -195,7 +213,7 @@ jobs:
         echo "✅ Unit tests completed successfully"
 
     - name: Upload test results
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       if: always()
       # Best-effort: org Actions storage quota exhaustion must not fail the
       # build (#177 — observed as "Artifact storage quota has been hit").
@@ -223,13 +241,19 @@ jobs:
         DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
       run: |
         echo "Running integration tests..."
-        # Check if the app can be built and archived
+        # Check if the app can be built and archived. Dependabot runs have no
+        # Developer ID cert — ad-hoc sign instead.
+        SIGNING=()
+        if [ "$IS_DEPENDABOT" = "true" ]; then
+          SIGNING=("CODE_SIGN_IDENTITY=-")
+        fi
         xcodebuild -project TempoStatusBarApp.xcodeproj \
           -scheme TempoStatusBarApp \
           -configuration Release \
           -destination 'platform=macOS' \
           DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
           MARKETING_VERSION="${{ steps.version.outputs.version }}" \
+          "${SIGNING[@]}" \
           archive \
           -archivePath ./build/TempoStatusBarApp.xcarchive
           
@@ -258,15 +282,19 @@ jobs:
         echo "=== codesign --verify --deep --strict ==="
         codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
-        echo "=== Identity must be a Developer ID Application cert ==="
-        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=Developer ID Application:' \
-          || { echo "❌ Expected Authority=Developer ID Application: not found"; exit 1; }
+        if [ "$IS_DEPENDABOT" = "true" ]; then
+          echo "=== Dependabot run: ad-hoc signed, skipping Developer ID authority check ==="
+        else
+          echo "=== Identity must be a Developer ID Application cert ==="
+          codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=Developer ID Application:' \
+            || { echo "❌ Expected Authority=Developer ID Application: not found"; exit 1; }
+        fi
 
         echo "=== Hardened Runtime must be enabled ==="
         codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'flags=.*runtime' \
           || { echo "❌ Hardened Runtime flag not present in signature"; exit 1; }
 
-        echo "✅ Code signature verified (Developer ID + Hardened Runtime)"
+        echo "✅ Code signature verified"
 
     - name: Create DMG
       run: |
@@ -283,7 +311,9 @@ jobs:
         echo "Created $DMG_NAME"
 
     - name: Sign DMG
-      if: github.event.pull_request.head.repo.full_name == github.repository
+      # Same-repo guard for fork PRs; Dependabot branches are same-repo but
+      # have no signing secrets (see IS_DEPENDABOT above).
+      if: github.event.pull_request.head.repo.full_name == github.repository && env.IS_DEPENDABOT != 'true'
       run: |
         DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
 
@@ -303,7 +333,7 @@ jobs:
         codesign --verify --verbose=2 "$DMG"
 
     - name: Notarize DMG
-      if: github.event.pull_request.head.repo.full_name == github.repository
+      if: github.event.pull_request.head.repo.full_name == github.repository && env.IS_DEPENDABOT != 'true'
       env:
         AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
         AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
@@ -327,7 +357,7 @@ jobs:
         rm "$KEY_PATH"
 
     - name: Staple notarization ticket
-      if: github.event.pull_request.head.repo.full_name == github.repository
+      if: github.event.pull_request.head.repo.full_name == github.repository && env.IS_DEPENDABOT != 'true'
       run: |
         DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
         xcrun stapler staple "$DMG"
@@ -337,7 +367,7 @@ jobs:
         spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
 
     - name: Ensure AWS CLI
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && env.IS_DEPENDABOT != 'true'
       run: |
         # Self-hosted runners keep the CLI installed between runs; a bare
         # `brew install` would try to upgrade an existing copy (see the
@@ -346,14 +376,15 @@ jobs:
 
     - name: Configure AWS credentials
       # Fork PRs have no OIDC access to the role — same guard as sign/notarize.
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-      uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a  # v4.3.1
+      # Dependabot runs get a read-only token (no id-token) and no AWS_ROLE_ARN.
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && env.IS_DEPENDABOT != 'true'
+      uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c  # v6.2.3
       with:
         role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
         aws-region: ${{ env.S3_REGION }}
 
     - name: Upload DMG to S3
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && env.IS_DEPENDABOT != 'true'
       run: |
         set -euo pipefail
         DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
@@ -361,9 +392,11 @@ jobs:
           --content-type application/x-apple-diskimage
 
     - name: Comment PR with build artifact link
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      # Also skipped for Dependabot: nothing was uploaded, and the read-only
+      # Dependabot token can't comment anyway.
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && env.IS_DEPENDABOT != 'true'
       continue-on-error: true
-      uses: actions/github-script@v7
+      uses: actions/github-script@v9
       with:
         script: |
           const version = `${{ steps.version.outputs.version }}`;
@@ -434,7 +467,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     - name: Prevent idle sleep
       # macOS idle sleep tracks user input, not CPU load, so a busy job can't
@@ -495,7 +528,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@master
@@ -507,7 +540,7 @@ jobs:
         cache: 'false'
         
     - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@v4
       if: always() && github.event_name == 'pull_request'
       with:
         sarif_file: 'trivy-results.sarif'
