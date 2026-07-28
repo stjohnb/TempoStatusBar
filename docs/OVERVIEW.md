@@ -281,9 +281,9 @@ No environment variables or build-time configuration. There are no hardcoded end
 
 Issue triage, PR labelling, and related repository maintenance are handled by the Claws automation service. See [claws-automation.md](claws-automation.md) for details on how Claws manages this repo.
 
-## Intent Log
+## Requirements
 
-A chronological record of the repo owner's stated requirements, decisions, and rationale (extracted from issue/PR bodies and comments) lives in [intent-log.md](intent-log.md). Consult it for *why* behind decisions that aren't obvious from the code alone.
+Standing, cross-cutting constraints from the repo owner that aren't tied to one subsystem doc (e.g. GitHub repo settings, secret-handling policy) live in [requirements.md](requirements.md). Subsystem-specific constraints and their rationale live inline in the relevant doc (this file, [api-design.md](api-design.md), [ci-cd.md](ci-cd.md)) rather than in a separate log.
 
 ## CI/CD
 
