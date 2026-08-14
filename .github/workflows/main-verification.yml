@@ -25,15 +25,15 @@ jobs:
 
     - name: Prevent idle sleep
       # macOS idle sleep tracks user input, not CPU load, so a busy job can't
-      # keep a shared Mac awake by itself (bonkus#1550). keep-awake (dot-files,
-      # symlinked into ~/bin, which is not on the runner service's PATH) holds
-      # a caffeinate assertion bounded to timeout-minutes plus margin; the
-      # always() step at the end releases it. Warn-only so a Mac without
-      # dot-files installed doesn't fail the job. See dot-files
+      # keep a shared Mac awake by itself (bonkus#1550). keep-awake (nixos-config
+      # home/mac, installed into ~/bin, which is not on the runner service's
+      # PATH) holds a caffeinate assertion bounded to timeout-minutes plus
+      # margin; the always() step at the end releases it. Warn-only so a Mac
+      # without it installed doesn't fail the job. See nixos-config
       # docs/macos-runners.md, "Power / keep-awake".
       run: |
         "$HOME/bin/keep-awake" on 40 \
-          || echo "::warning::keep-awake unavailable on $(hostname) — run dot-files/install.sh on this Mac"
+          || echo "::warning::keep-awake unavailable on $(hostname) — run home-manager switch on this Mac (nixos-config)"
 
     - name: Select Xcode
       # Shared convention for the two self-hosted Macs (used identically by
