@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=TempoStatusBar
+Comment=Days since your last Jira Tempo worklog
+Exec=tempo-statusbar
+Terminal=false
+Categories=Utility;Network;
+X-GNOME-Autostart-enabled=true

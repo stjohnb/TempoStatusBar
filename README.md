@@ -64,6 +64,51 @@ Use **Auto-detect** to resolve your username from the API token, and **Test
 Connection** to verify your settings before saving. Credentials are stored in
 the macOS Keychain, never in plain text.
 
+## Linux
+
+`linux/` holds a native Rust tray app — a separate implementation, not a port.
+It speaks the freedesktop **StatusNotifierItem** protocol, calls the same two
+Tempo endpoints, and uses the same thresholds and colours as the macOS app.
+Configuration is a `config.toml` plus `init` / `set-token` subcommands rather
+than a settings GUI; the API token lives in the Secret Service, or comes from
+`TEMPO_API_TOKEN` or a `token_command`.
+
+**GNOME needs an extension.** GNOME Shell shows no StatusNotifierItem without
+`gnome-shell-extension-appindicator` (the "AppIndicator and KStatusNotifierItem
+Support" extension), and it must be *enabled*, not merely installed. Without
+it, `tempo-statusbar` prints a `StatusNotifierWatcher` message on stderr and
+exits non-zero rather than sitting there invisibly. KDE Plasma, Xfce, Cinnamon
+and wlroots panels (Waybar, i3status-rust) support SNI natively and need
+nothing extra.
+
+### Download
+
+Releases are tagged **`linux-vX.Y.Z`**, separately from the macOS `vX.Y.Z`
+line. Each carries `tempo-statusbar-<version>-x86_64-linux.tar.gz` and a
+`.sha256`:
+
+```sh
+sha256sum -c tempo-statusbar-<version>-x86_64-linux.tar.gz.sha256
+tar xzf tempo-statusbar-<version>-x86_64-linux.tar.gz
+cd tempo-statusbar-<version>-x86_64-linux
+install -Dm755 tempo-statusbar ~/.local/bin/tempo-statusbar
+tempo-statusbar init
+$EDITOR ~/.config/tempo-statusbar/config.toml   # set jira_url
+tempo-statusbar set-token
+```
+
+The binary is statically linked against musl: no runtime dependencies, no
+system cert store, no glibc version to match. The tarball also ships a
+`.desktop` autostart entry, a systemd user unit and an `INSTALL.md`.
+
+**x86_64 only.** Other architectures build from source:
+
+```sh
+nix build github:stjohnb/TempoStatusBar#static
+```
+
+Full details in [docs/linux.md](docs/linux.md).
+
 ## How it works
 
 The app authenticates with `Authorization: Bearer <token>` and calls two

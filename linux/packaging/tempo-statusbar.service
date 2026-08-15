@@ -1,0 +1,16 @@
+[Unit]
+Description=TempoStatusBar tray
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/tempo-statusbar
+# The app exits non-zero when no StatusNotifierWatcher is on the session bus.
+# At login that is usually a race against the panel/extension starting, not a
+# permanent failure, so retry rather than give up.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

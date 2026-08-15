@@ -1,0 +1,93 @@
+name: Linux CI
+
+# Triggers removed for the public snapshot — this workflow is intentionally disabled.
+# See the private source repository for the active version.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NIX_FLAGS: --extra-experimental-features nix-command --extra-experimental-features flakes
+
+jobs:
+  build-and-test:
+    name: Build and Test (Rust)
+    runs-on: [self-hosted, linux]
+    # The first run pulls the Rust toolchain closure into the nix store.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    defaults:
+      run:
+        working-directory: linux
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Set up Nix
+      uses: ./.github/actions/setup-nix
+
+    # `..#` points nix at the root flake while the working directory is linux/.
+    - name: Check formatting
+      run: nix $NIX_FLAGS develop ..# --command cargo fmt --check
+
+    - name: Clippy
+      run: nix $NIX_FLAGS develop ..# --command cargo clippy --all-targets -- -D warnings
+
+    - name: Test
+      run: nix $NIX_FLAGS develop ..# --command cargo test
+
+    - name: Build (release)
+      run: nix $NIX_FLAGS develop ..# --command cargo build --release
+
+    - name: Comment on PR with Linux build status
+      # Fork PRs get a read-only GITHUB_TOKEN and can't comment. Separate
+      # marker from pr-verification.yml's DMG comment so a mixed Swift +
+      # Rust PR gets one comment per platform instead of one overwriting
+      # the other.
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      continue-on-error: true
+      uses: actions/github-script@v9
+      with:
+        script: |
+          const sha = context.payload.pull_request.head.sha.substring(0, 7);
+          const marker = '<!-- pr-build-comment-linux -->';
+
+          const body = [
+            marker,
+            '## Linux Build Verified',
+            '',
+            `\`cargo fmt --check\`, clippy, \`cargo test\`, and a release build all passed for \`${sha}\`.`,
+            '',
+            '> Static x86_64 release binaries are published as `linux-vX.Y.Z` releases — bump `version` in `linux/Cargo.toml` to cut one. To build locally: `nix build .#static` at the repo root.',
+          ].join('\n');
+
+          const allComments = await github.paginate(github.rest.issues.listComments, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+          const existing = allComments.find(c => c.body.includes(marker));
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+          }

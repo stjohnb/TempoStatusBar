@@ -2,7 +2,7 @@
 
 ## Workflow Files
 
-All workflows live in `.github/workflows/`. Seven workflows cover the full development lifecycle.
+All workflows live in `.github/workflows/`. Nine workflows cover the full development lifecycle.
 
 ### Common Settings (all workflows)
 
@@ -15,7 +15,7 @@ All workflows live in `.github/workflows/`. Seven workflows cover the full devel
 
 ## `pr-verification.yml` — PR Verification
 
-**Trigger:** `pull_request` targeting `main`
+**Trigger:** `pull_request` targeting `main` (`paths-ignore`: `docs/**`, `**/*.md`, `linux/**`, `flake.nix`, `flake.lock`)
 
 **Jobs:**
 
@@ -32,7 +32,7 @@ Steps:
 6. Unit tests via `./run_tests.sh`, with `TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS: "1"` set on the step (see [Key Design Decisions](#key-design-decisions)) — uploads `test-results.xcresult` as artifact (3-day retention, `continue-on-error: true` in both PR and main workflows so org storage-quota exhaustion cannot fail the build)
 7. Archive (`xcodebuild … archive -archivePath ./build/TempoStatusBarApp.xcarchive`)
 8. Verify `.app` bundle structure
-9. **Verify code signature** — confirms `Authority=TempoStatusBar Signing` is present
+9. **Verify code signature** — confirms `Authority=Developer ID Application:` is present
 10. Create DMG with `hdiutil create`
 11. **Sign and notarize DMG** (skipped on fork PRs) — sign the DMG with the Developer ID identity, submit via `xcrun notarytool`, staple, and re-verify with `spctl --assess`
 12. **Upload DMG to S3** (skipped on fork PRs) — `command -v aws || brew install awscli`, assume the OIDC role via `aws-actions/configure-aws-credentials`, then `aws s3 cp` to `s3://<bucket>/pr/<N>/TempoStatusBarApp-<version>.dmg`
@@ -74,7 +74,7 @@ The step uses `continue-on-error: true` so a comment failure doesn't fail the bu
 
 ## `main-verification.yml` — Main Branch Verification
 
-**Trigger:** Push to `main`, manual dispatch (`workflow_dispatch`)
+**Trigger:** Push to `main` (`paths-ignore`: `linux/**`, `flake.nix`, `flake.lock`), manual dispatch (`workflow_dispatch`)
 
 **Jobs:**
 
@@ -86,7 +86,98 @@ The step uses `continue-on-error: true` so a comment failure doesn't fail the bu
 
 ---
 
-## `release-tag.yml` — Release Build
+## `linux-ci.yml` — Linux App CI
+
+**Trigger:** `pull_request` targeting `main` and pushes to `main`, restricted by `paths` to `linux/**`, `flake.nix`, `flake.lock`, the workflow itself, and `.github/actions/setup-nix/**`
+
+**Jobs:**
+
+| Job | Runner | Description |
+|---|---|---|
+| `build-and-test` | `[self-hosted, linux]` | `cargo fmt --check` → `cargo clippy --all-targets -- -D warnings` → `cargo test` → `cargo build --release` |
+
+Every step runs through `nix $NIX_FLAGS develop ..# --command …` from the
+`linux/` working directory (`..#` selects the root flake). The toolchain is
+repo-owned: it comes from the `flake.nix` devShell, never from the runner. The
+`.github/actions/setup-nix` composite action puts the runner's Nix on `PATH` and
+fails loudly if there is none; it is copied verbatim from `St-John-Software/claws`,
+the org reference implementation. `timeout-minutes: 30` covers the first run,
+which pulls the Rust toolchain closure into the nix store.
+
+`pr-verification.yml` and `main-verification.yml` list `linux/**`, `flake.nix`
+and `flake.lock` in `paths-ignore` so Rust-only changes never occupy the shared
+Macs. `paths-ignore` only skips when *every* changed file matches, so a mixed
+Swift + Rust change still runs the macOS jobs.
+
+On `pull_request` runs against a same-repo branch, a final step posts (or
+updates) a PR comment confirming the Rust checks and release build passed for
+the head SHA, under a `<!-- pr-build-comment-linux -->` marker — separate from
+`pr-verification.yml`'s `<!-- pr-build-comment -->` DMG marker, so a mixed
+Swift + Rust PR gets one comment per platform instead of one clobbering the
+other. There is no DMG-equivalent download link — Linux binaries are published
+per release rather than per PR, so the comment reports build status and points
+at `linux-release.yml`'s version gate. Fork PRs skip this step (read-only
+`GITHUB_TOKEN`), and `continue-on-error: true` keeps a comment failure from
+failing the build.
+
+---
+
+## `linux-release.yml` — Linux Release
+
+**Trigger:** Push to `main` restricted by `paths` to `linux/**`, `flake.nix`, `flake.lock` and the workflow itself; manual dispatch (`workflow_dispatch`)
+
+**Jobs:**
+
+| Job | Runner | Description |
+|---|---|---|
+| `release` | `[self-hosted, linux]` | Version gate → `nix build .#static` → static-linkage and version assertions → tarball + `.sha256` → `gh release create linux-vX.Y.Z` |
+
+`concurrency: linux-release` with `cancel-in-progress: false` — two rapid
+merges must not cancel a run that has already created a tag.
+`timeout-minutes: 90` covers the first `pkgsStatic` build, which compiles a
+musl stdenv closure and `ring` from source; later runs hit the nix store.
+
+**The gate is version-driven, not push-driven.** The first step resolves
+`nix $NIX_FLAGS eval --raw .#static.version` — which reads `linux/Cargo.toml`,
+the single source of truth — rejects anything that is not plain `X.Y.Z`, and
+sets `release=false` with a `::notice::` if `linux-vX.Y.Z` already exists.
+Every later step is `if: steps.gate.outputs.release == 'true'`, so a
+`linux/**` merge without a version bump is a green no-op.
+
+Two assertions run before anything is published: `readelf -l | grep -q INTERP`
+fails the job if `.#static` produced a dynamically-linked binary, and
+`tempo-statusbar --version` must equal the tag's version. Only `--version` is
+run — clap prints and exits 0 without touching D-Bus, whereas running the
+binary bare would start the tray and exit non-zero on a runner with no session
+bus. `readelf` comes from `pkgs.binutils` in the repo's own devShell, invoked
+via `nix develop .# --command`; the whole artifact is built through the repo
+flake rather than a `rustup` step, so the binary users download and the binary
+Nix builds come from one expression.
+
+The tarball `tempo-statusbar-<version>-x86_64-linux.tar.gz` carries the binary
+plus `linux/packaging/`'s `.desktop` entry, systemd user unit and `INSTALL.md`,
+and is built reproducibly (`--sort=name --owner=0 --group=0 --numeric-owner
+--mtime='@0'`). There is **no S3 upload**: unlike the macOS DMG, the Linux
+assets live on the GitHub release, which is what the Claws snapshot job copies
+to the public mirror.
+
+The `linux-v*` tag namespace is deliberately separate from the macOS `v1.3.x`
+line. Because `release-tag.yml` triggers on `on: release` with no tag filter,
+all three of its jobs carry
+`if: ${{ !startsWith(github.event.release.tag_name, 'linux-v') }}` — otherwise
+a `linux-v*` release would start a macOS sign+notarize build with
+`MARKETING_VERSION=linux-0.1.0`. On `workflow_dispatch`,
+`github.event.release` is null, so the guard evaluates true and behaviour is
+unchanged. (In practice a `GITHUB_TOKEN`-created release does not start
+workflows at all; the guard covers a hand- or PAT-created one.)
+
+x86_64 only — both self-hosted runners are x86_64. `packages.static` is
+defined for `aarch64-linux` in `flake.nix` but nothing builds it; aarch64
+builds from source.
+
+---
+
+## `release-tag.yml` — Release Verification
 
 **Trigger:** GitHub `release` events (`created`, `edited`), manual dispatch
 
@@ -248,5 +339,6 @@ The release and PR workflows additionally **notarize and staple** the DMG so Gat
 - **Notarization on PR and release builds** — both `pr-verification.yml` and `release-tag.yml` sign, notarize, and staple the DMG so users (including maintainers grabbing a PR build) don't hit Gatekeeper's first-launch warning. Main builds still skip notarization because their DMGs are not distributed. Notarization adds ~30s–2min per build. The PR notarization steps are gated on `github.event.pull_request.head.repo.full_name == github.repository` so that fork PRs (no secrets) skip them gracefully — those PRs still produce a signed DMG, just not a notarized one, and the publish + comment steps are already skipped for forks.
 - **Signing verification in CI** — the "Verify code signature" step asserts both `Authority=Developer ID Application:` and the presence of the `runtime` flag in the signature. This catches accidental ad-hoc, self-signed, or unhardened builds before the DMG is packaged.
 - **`spctl --assess` over `stapler validate` alone** — the release workflow runs both. `stapler validate` confirms a ticket exists locally; `spctl --assess --type open --context context:primary-signature` is what Gatekeeper actually runs when a user opens the file from a quarantined download. Asserting both protects against the case where stapling appeared to succeed but the ticket doesn't satisfy Gatekeeper.
+- **Separate `linux-v*` tag namespace, GitHub assets not S3** — the Linux tray app releases on its own `linux-vX.Y.Z` line so its cadence is not welded to the macOS `v1.3.x` line, and its tarball is attached to the GitHub release rather than uploaded to S3. The DMG went to S3 because of its size and the macOS quarantine-origin problem (see above); neither applies to a ~10 MB tarball, and release assets are what the Claws snapshot job copies to the public mirror, which is the whole point of publishing it. The version is read from `linux/Cargo.toml` rather than from a tag the operator types, so the tag, the flake and the binary's `--version` cannot disagree — the workflow asserts all three. Because `release-tag.yml` triggers on `on: release` with no tag filter, every one of its jobs needs a `!startsWith(github.event.release.tag_name, 'linux-v')` guard; adding a job there without one restarts the macOS sign+notarize path on Linux releases.
 - **Self-hosted runners — macOS and Linux** — build/test/quality jobs run on `[self-hosted, macos, tempo]`. The Linux-only utility jobs (Trivy scans, docs checks, PR cleanup, failure notification) run on `[self-hosted, linux]` and declare an explicit OS label so they are never scheduled onto a macOS runner.
 - **Real-keychain test skip on CI (`TEMPO_SKIP_KEYCHAIN_TESTS`)** — `CredentialManagerHasStoredCredentialsTests` (see [OVERVIEW.md](OVERVIEW.md#testing)) exercises the real Keychain via `CredentialManager.shared`, including deleting the item under the production service name in `setUp`/`tearDown`. On the shared self-hosted Macs, the runner user's login keychain holds genuine credentials, and headless keychain access blocks on an authorization dialog instead of failing fast (observed as multi-minute test hangs, and once an actual password prompt on the runner's screen). `pr-verification.yml` and `main-verification.yml` set `TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS: "1"` on the "Run unit tests" step; `xcodebuild` only forwards environment variables prefixed `TEST_RUNNER_` into the test-host process (stripping the prefix), so the test suite sees plain `TEMPO_SKIP_KEYCHAIN_TESTS=1`. The gate lives in `setUpWithError` (via `XCTSkipIf`) rather than `setUp`, because it must run before any keychain access is attempted. Locally, without the env var, the suite runs unskipped against the real Keychain as before.

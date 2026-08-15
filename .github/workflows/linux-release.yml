@@ -1,0 +1,178 @@
+name: Linux Release
+
+# Triggers removed for the public snapshot — this workflow is intentionally disabled.
+# See the private source repository for the active version.
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-release
+  cancel-in-progress: false
+
+env:
+  NIX_FLAGS: --extra-experimental-features nix-command --extra-experimental-features flakes
+
+jobs:
+  release:
+    name: Build and Publish Static Binary
+    runs-on: [self-hosted, linux]
+    # The first pkgsStatic build compiles a musl stdenv closure from source.
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Set up Nix
+      uses: ./.github/actions/setup-nix
+
+    - name: Resolve version and decide whether to release
+      id: gate
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Evaluates the attribute only — does not build.
+        VERSION=$(nix $NIX_FLAGS eval --raw .#static.version)
+        if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::linux/Cargo.toml version '$VERSION' is not X.Y.Z; pre-release Linux tags are not supported"
+          exit 1
+        fi
+        TAG="linux-v$VERSION"
+        DIR="tempo-statusbar-$VERSION-x86_64-linux"
+        if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+          echo "::notice::$TAG already exists — bump version in linux/Cargo.toml to publish"
+          echo "release=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "release=true" >> "$GITHUB_OUTPUT"
+        fi
+        {
+          echo "version=$VERSION"
+          echo "tag=$TAG"
+          echo "dir=$DIR"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Build static binary
+      if: steps.gate.outputs.release == 'true'
+      run: nix $NIX_FLAGS build .#static
+
+    - name: Verify the artifact
+      if: steps.gate.outputs.release == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        BIN=./result/bin/tempo-statusbar
+        # readelf comes from pkgs.binutils in the repo's own devShell.
+        if nix $NIX_FLAGS develop .# --command readelf -l "$BIN" | grep -q INTERP; then
+          echo "::error::.#static produced a dynamically-linked binary (ELF INTERP segment present)"
+          exit 1
+        fi
+        # Only --version: clap prints and exits 0 without touching D-Bus. Running
+        # the binary bare would start the tray and exit non-zero on a CI box with
+        # no session bus.
+        REPORTED=$("$BIN" --version | awk '{print $2}')
+        if [ "$REPORTED" != "${{ steps.gate.outputs.version }}" ]; then
+          echo "::error::Binary reports $REPORTED but tag is ${{ steps.gate.outputs.tag }}"
+          exit 1
+        fi
+        echo "✅ static, and reports $REPORTED"
+
+    - name: Stage the tarball
+      if: steps.gate.outputs.release == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        DIR="${{ steps.gate.outputs.dir }}"
+        rm -rf dist && mkdir -p "dist/$DIR"
+        # -m 0755 is required: the nix store copy is read-only.
+        install -m 0755 ./result/bin/tempo-statusbar "dist/$DIR/tempo-statusbar"
+        install -m 0644 linux/packaging/tempo-statusbar.desktop "dist/$DIR/"
+        install -m 0644 linux/packaging/tempo-statusbar.service "dist/$DIR/"
+        install -m 0644 linux/packaging/INSTALL.md "dist/$DIR/"
+        tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@0' \
+            -C dist -czf "$DIR.tar.gz" "$DIR"
+        sha256sum "$DIR.tar.gz" > "$DIR.tar.gz.sha256"
+
+    - name: Write release notes
+      if: steps.gate.outputs.release == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        DIR="${{ steps.gate.outputs.dir }}"
+        cat > release-notes.md <<EOF
+        Linux tray app, version ${{ steps.gate.outputs.version }}.
+
+        This is the Linux companion to the TempoStatusBar macOS menu bar app —
+        a separate Rust implementation speaking the StatusNotifierItem protocol,
+        with the same Tempo endpoints, thresholds and colours. It is released on
+        its own \`linux-v*\` tag line, independent of the macOS \`v*\` releases.
+
+        ## Download
+
+        Grab both assets below, verify the checksum, then unpack:
+
+        \`\`\`sh
+        sha256sum -c $DIR.tar.gz.sha256
+        tar xzf $DIR.tar.gz
+        \`\`\`
+
+        The binary is **statically linked**: no runtime dependencies, no system
+        cert store needed (the Mozilla trust roots are compiled in), and no
+        glibc version to match. It runs on any x86_64 Linux distribution.
+
+        ## Install
+
+        \`\`\`sh
+        cd $DIR
+        install -Dm755 tempo-statusbar ~/.local/bin/tempo-statusbar
+        tempo-statusbar init
+        \$EDITOR ~/.config/tempo-statusbar/config.toml    # set jira_url
+        tempo-statusbar set-token
+        \`\`\`
+
+        For autostart, the tarball ships both a \`.desktop\` entry and a systemd
+        user unit — see \`INSTALL.md\` inside it. The systemd unit is
+        recommended, because \`Restart=on-failure\` wins the login-time race
+        against the panel starting.
+
+        ## GNOME needs an extension
+
+        GNOME Shell shows **no** StatusNotifierItem without
+        \`gnome-shell-extension-appindicator\` (the "AppIndicator and
+        KStatusNotifierItem Support" extension). Installing the package is not
+        enough — the extension must be **enabled**.
+
+        Without it, \`tempo-statusbar\` prints a \`StatusNotifierWatcher\`
+        message on stderr and exits non-zero rather than failing silently. This
+        is expected SNI behaviour, not an app bug.
+
+        KDE Plasma, Xfce, Cinnamon and wlroots panels (Waybar, i3status-rust)
+        support SNI natively and need nothing extra.
+
+        ## Architectures
+
+        x86_64 only — aarch64 and other architectures build from source:
+
+        \`\`\`sh
+        nix build github:stjohnb/TempoStatusBar#static
+        \`\`\`
+        EOF
+
+    - name: Create release
+      if: steps.gate.outputs.release == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        DIR="${{ steps.gate.outputs.dir }}"
+        # `gh release create` creates the tag at --target; no separate tag step.
+        # Title equals tag deliberately — release-tag.yml enforces name == tag
+        # for the macOS line and the convention is worth keeping uniform.
+        gh release create "${{ steps.gate.outputs.tag }}" \
+          --repo "$GITHUB_REPOSITORY" \
+          --target "$GITHUB_SHA" \
+          --title "${{ steps.gate.outputs.tag }}" \
+          --notes-file release-notes.md \
+          "$DIR.tar.gz" "$DIR.tar.gz.sha256"

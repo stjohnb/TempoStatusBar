@@ -17,6 +17,14 @@ jobs:
   release-build:
     name: Release Build
     runs-on: [self-hosted, macos, tempo]
+    # `on: release` has no tag filter, so a `linux-v*` release cut by
+    # linux-release.yml would otherwise start a full macOS sign+notarize build
+    # and derive a nonsense MARKETING_VERSION ("linux-0.1.0"). The two release
+    # lines are deliberately separate. `github.event.release` is null on
+    # workflow_dispatch, so the expression is true there and behaviour is
+    # unchanged. (In practice a GITHUB_TOKEN-created release does not trigger
+    # workflows at all — this guards a hand- or PAT-created `linux-v*` release.)
+    if: ${{ !startsWith(github.event.release.tag_name, 'linux-v') }}
     # Only two Macs serve three repos — a wedged job must not hold one for hours.
     timeout-minutes: 60
     env:
@@ -337,7 +345,10 @@ jobs:
   security-check:
     name: Security Check
     runs-on: [self-hosted, linux]
-    
+    # See the guard on release-build: `linux-v*` releases are the Linux app's
+    # own line and are verified by linux-release.yml.
+    if: ${{ !startsWith(github.event.release.tag_name, 'linux-v') }}
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
@@ -361,7 +372,9 @@ jobs:
   documentation-check:
     name: Documentation Check
     runs-on: [self-hosted, linux]
-    
+    # See the guard on release-build.
+    if: ${{ !startsWith(github.event.release.tag_name, 'linux-v') }}
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v7

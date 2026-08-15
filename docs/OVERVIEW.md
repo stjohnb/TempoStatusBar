@@ -18,10 +18,24 @@ SettingsView.swift             SwiftUI settings popover
 UpdateChecker.swift            GitHub Releases update check
 LaunchAtLoginManager.swift     SMAppService login-item wrapper (macOS 13+)
 TempoStatusBarAppTests/        XCTest unit tests (mocked)
-.github/workflows/             CI/CD (PR, main, release)
+linux/                         Linux tray app (Rust) — see "Linux App" below
+flake.nix                      Nix dev shell + package for the Linux app
+.github/actions/               Composite actions (setup-nix)
+.github/workflows/             CI/CD (PR, main, release, Linux)
 README.md                      Private-repo README (setup/config instructions)
 README.public.md               Source for the public repo's README — see "Public Snapshot" below
 ```
+
+### Linux App
+
+`linux/` is a separate Rust implementation of the same idea for Linux desktops:
+a StatusNotifierItem tray (via `ksni`) that polls the same two Tempo endpoints
+and applies the same severity thresholds and colours. It is not a port of the
+Swift code and shares no source with it — the macOS app is unchanged by its
+existence. Credentials come from the freedesktop Secret Service, a
+`token_command`, or `TEMPO_API_TOKEN`; there is no settings GUI and no update
+checker. See [linux.md](linux.md) for the architecture, the desktop-environment
+credential matrix, and the deliberate scope cuts.
 
 ### Key Classes
 
@@ -287,10 +301,11 @@ Standing, cross-cutting constraints from the repo owner that aren't tied to one 
 
 ## CI/CD
 
-Seven GitHub Actions workflows — see [ci-cd.md](ci-cd.md) for full details. DMGs are stored in S3 (bucket `tempo-statusbar-releases`), uploaded via GitHub OIDC (`AWS_ROLE_ARN` secret) — not as GitHub Release assets (#177).
+Eight GitHub Actions workflows — see [ci-cd.md](ci-cd.md) for full details. DMGs are stored in S3 (bucket `tempo-statusbar-releases`), uploaded via GitHub OIDC (`AWS_ROLE_ARN` secret) — not as GitHub Release assets (#177).
 
 | Workflow | Trigger | Key jobs |
 |---|---|---|
+| `linux-ci.yml` | PRs/pushes touching `linux/**`, `flake.nix`, `flake.lock` | `cargo fmt --check`, clippy, test, release build — all via `nix develop` on `[self-hosted, linux]` |
 | `pr-verification.yml` | PRs to `main` | Build+test (with signing), SwiftLint, Trivy scan, DMG upload to `s3://…/pr/<N>/`, PR comment |
 | `pr-cleanup.yml` | PR `closed` | Deletes the PR's `pr/<N>/` prefix from S3 |
 | `main-verification.yml` | Push to `main`, manual | Build (with signing), Trivy scan, docs check |

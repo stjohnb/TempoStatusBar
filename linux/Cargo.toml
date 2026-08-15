@@ -1,0 +1,30 @@
+[package]
+name = "tempo-statusbar"
+version = "0.1.0"
+edition = "2021"
+description = "Linux tray companion to the TempoStatusBar macOS menu bar app"
+publish = false
+
+# The release artifact is a fully static x86_64-unknown-linux-musl binary
+# (`nix build .#static`). That is a consequence of the feature flags below:
+# reqwest uses rustls-tls with webpki-roots (trust roots compiled in — no
+# system cert store, no SSL_CERT_FILE), ksni uses its pure-Rust zbus backend
+# (no libdbus-sys), and nothing pulls openssl-sys or native-tls. Swapping any
+# of those, or adding a crate that links a C library other than `ring`,
+# silently breaks the static build. Check `nix build .#static` if you do.
+[dependencies]
+# Pure-Rust StatusNotifierItem tray (zbus, no libdbus): the "blocking" feature
+# gives a non-async API so the app needs no async runtime.
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# "v1" exposes the simple Entry API; the zbus store talks to the freedesktop
+# Secret Service without linking libdbus.
+keyring = { version = "4", default-features = false, features = ["v1", "zbus-secret-service-keyring-store"] }
+dirs = "5"
+clap = { version = "4", features = ["derive"] }
+rpassword = "7"
+thiserror = "1"
