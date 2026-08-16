@@ -23,6 +23,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+    env:
+      # Dependabot runs get a read-only GITHUB_TOKEN and cannot comment.
+      IS_DEPENDABOT: ${{ github.actor == 'dependabot[bot]' }}
     defaults:
       run:
         working-directory: linux
@@ -48,11 +51,11 @@ jobs:
       run: nix $NIX_FLAGS develop ..# --command cargo build --release
 
     - name: Comment on PR with Linux build status
-      # Fork PRs get a read-only GITHUB_TOKEN and can't comment. Separate
-      # marker from pr-verification.yml's DMG comment so a mixed Swift +
-      # Rust PR gets one comment per platform instead of one overwriting
-      # the other.
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      # Fork PRs and Dependabot runs get a read-only GITHUB_TOKEN and can't
+      # comment. Separate marker from pr-verification.yml's DMG comment so a
+      # mixed Swift + Rust PR gets one comment per platform instead of one
+      # overwriting the other.
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && env.IS_DEPENDABOT != 'true'
       continue-on-error: true
       uses: actions/github-script@v9
       with:

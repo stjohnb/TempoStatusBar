@@ -58,6 +58,8 @@ Runs on `[self-hosted, linux]`. Steps: Checkout + `aquasecurity/trivy-action@mas
 
 Human and fork-PR behavior is unchanged: the pre-existing same-repo guard (`github.event.pull_request.head.repo.full_name == github.repository`) on the signing/upload/comment steps is simply extended with `&& env.IS_DEPENDABOT != 'true'`, since Dependabot branches live in this repo (same-repo) but lack signing/AWS secrets the same way a fork PR does.
 
+`linux-ci.yml` also skips its PR-comment step for Dependabot for the same read-only-token reason.
+
 ---
 
 ## PR Build Comment
@@ -224,7 +226,7 @@ The final step prints the role ARN to the job summary along with the decommissio
 
 ## `notify-failures.yml` — Main Branch Failure Notification
 
-**Trigger:** `workflow_run` on the `"Main Verification"` and `"Actions Storage Cleanup"` workflows, type `completed`
+**Trigger:** `workflow_run` on the `"Main Verification"`, `"Actions Storage Cleanup"`, `"Linux CI"`, and `"Linux Release"` workflows, type `completed`
 
 **Permissions:** `contents: read`, `issues: write`, `actions: read`
 
@@ -235,17 +237,19 @@ The final step prints the role ARN to the job summary along with the decommissio
 Runs on `[self-hosted, linux]`. The job only executes when:
 - `github.event.workflow_run.conclusion == 'failure'`
 - `github.event.workflow_run.head_branch == 'main'`
+- `github.event.workflow_run.event != 'pull_request'`
 
 **Steps:**
 
 1. **Deduplication check** — uses `gh issue list` + `jq` to count open issues with the title `"Build failure: <workflow name>"`. If one already exists, no new issue is created (prevents flood of duplicate issues for repeated failures before anyone fixes the build).
 2. **Dynamic label** — checks whether a `bug` label exists in the repo (`gh label list | grep -qx "bug"`). Only passes `--label bug` to `gh issue create` if the label is present; omits the flag otherwise to avoid a hard failure on repos without that label.
-3. **Issue creation** — creates an issue titled `"Build failure: <workflow name>"` (e.g. `"Build failure: Main Verification"` or `"Build failure: Actions Storage Cleanup"`) with a body linking to the failed workflow run URL. The title is built from `github.event.workflow_run.name`, so each monitored workflow deduplicates independently.
+3. **Issue creation** — creates an issue titled `"Build failure: <workflow name>"` (e.g. `"Build failure: Main Verification"`, `"Build failure: Actions Storage Cleanup"`, or `"Build failure: Linux CI"`) with a body linking to the failed workflow run URL. The title is built from `github.event.workflow_run.name`, so each monitored workflow deduplicates independently.
 
 **Key design points:**
 - The `workflow_run` trigger (rather than a step inside `main-verification.yml`) keeps failure notification fully decoupled from the build workflow. The build workflow does not need to be modified when notification behavior changes.
 - The branch guard (`head_branch == 'main'`) prevents the job from firing on feature-branch runs of the same workflow.
-- `notify-failures.yml` does **not** include itself in the `workflows:` list — self-referential inclusion would cause the workflow to trigger on its own runs.
+- `Linux CI` is the only monitored workflow with a `pull_request` trigger; a fork PR pushed from the fork's own `main` branch reports `head_branch == 'main'`, so without the `event != 'pull_request'` clause a failing fork PR run would file a bogus issue — and dedup-by-title would then suppress alerts for a genuine push-to-main failure. The event guard is what keeps fork PR failures from filing issues and poisoning the dedup title.
+- `notify-failures.yml` does **not** include itself in the `workflows:` list — self-referential inclusion would cause the workflow to trigger on its own runs. `PR Verification` is excluded because it is PR-scoped, not a main-branch build; `Release Verification` is excluded because it triggers on the `release` event, where `head_branch` is a tag, never `main`.
 - `cancel-in-progress: false` on the concurrency group ensures back-to-back main failures each get their own issue-creation attempt (though deduplication prevents actual duplicate issues).
 
 ---
@@ -271,7 +275,7 @@ This workflow protects the org-shared 2 GB Actions storage quota. These workflow
 
 ## `.github/dependabot.yml` — Dependency Updates
 
-Not a workflow — a Dependabot config file, added in #173 in response to a repo-wide "missing dependency-update configuration" alert. Enables version updates for the `github-actions` ecosystem only (`directory: /`); this is a Swift/SwiftUI repo with no `package.json` or SPM manifest, so `github-actions` is the only applicable ecosystem. Weekly schedule (`03:00 Europe/London`), `open-pull-requests-limit: 5`, and a single `all-dependencies` group with pattern `"*"` that collapses all action-version bumps into one grouped PR rather than one PR per action. Dependabot PRs still go through the normal `pr-verification.yml` checks like any other PR.
+Not a workflow — a Dependabot config file, added in #173 in response to a repo-wide "missing dependency-update configuration" alert. Enables version updates for the `github-actions` ecosystem (`directory: /`) and the `cargo` ecosystem (`directory: /linux`, the Rust tray crate added in #190). Both use a weekly schedule (`03:00 Europe/London`), `open-pull-requests-limit: 5`, and a single `all-dependencies` group with pattern `"*"` that collapses all version bumps into one grouped PR rather than one PR per crate or action. Dependabot resolves each `directory` independently, so a new manifest in a new directory needs its own entry even when the ecosystem already appears elsewhere in the repo. Cargo PRs only touch `linux/**`, which `pr-verification.yml` `paths-ignore`s, so they run `linux-ci.yml` on `[self-hosted, linux]` and never occupy the shared Macs; `github-actions` PRs run the macOS jobs and are gated on the `IS_DEPENDABOT` condition described earlier in this doc. Dependabot PRs still go through the normal checks like any other PR.
 
 ---
 

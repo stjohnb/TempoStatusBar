@@ -301,20 +301,21 @@ Standing, cross-cutting constraints from the repo owner that aren't tied to one 
 
 ## CI/CD
 
-Eight GitHub Actions workflows — see [ci-cd.md](ci-cd.md) for full details. DMGs are stored in S3 (bucket `tempo-statusbar-releases`), uploaded via GitHub OIDC (`AWS_ROLE_ARN` secret) — not as GitHub Release assets (#177).
+Nine GitHub Actions workflows — see [ci-cd.md](ci-cd.md) for full details. DMGs are stored in S3 (bucket `tempo-statusbar-releases`), uploaded via GitHub OIDC (`AWS_ROLE_ARN` secret) — not as GitHub Release assets (#177). The Linux tray app releases separately as a GitHub release asset, not via S3 (#192).
 
 | Workflow | Trigger | Key jobs |
 |---|---|---|
 | `linux-ci.yml` | PRs/pushes touching `linux/**`, `flake.nix`, `flake.lock` | `cargo fmt --check`, clippy, test, release build — all via `nix develop` on `[self-hosted, linux]` |
+| `linux-release.yml` | Push to `main` touching `linux/**`, `flake.nix`, `flake.lock`, manual | Version-gated: builds `.#static` (musl), asserts static linkage + `--version` match, tags `linux-vX.Y.Z`, publishes tarball + `.sha256` as GitHub release assets |
 | `pr-verification.yml` | PRs to `main` | Build+test (with signing), SwiftLint, Trivy scan, DMG upload to `s3://…/pr/<N>/`, PR comment |
 | `pr-cleanup.yml` | PR `closed` | Deletes the PR's `pr/<N>/` prefix from S3 |
 | `main-verification.yml` | Push to `main`, manual | Build (with signing), Trivy scan, docs check |
-| `release-tag.yml` | Release events, manual | Release build (with signing), DMG upload to `s3://…/releases/`, download link in release notes, Trivy scan, docs check |
+| `release-tag.yml` | Release events, manual | Release build (with signing), DMG upload to `s3://…/releases/`, download link in release notes, Trivy scan, docs check — skipped for `linux-v*` releases |
 | `s3-bootstrap.yml` | Manual only | One-time idempotent provisioning of the S3 bucket + OIDC role (uses temporary bootstrap credentials, then decommissioned) |
-| `notify-failures.yml` | `workflow_run` on `Main Verification` or `Actions Storage Cleanup` failure | Creates a GitHub issue when a monitored main-branch workflow fails (deduplicates per workflow) |
+| `notify-failures.yml` | `workflow_run` on `Main Verification`, `Actions Storage Cleanup`, `Linux CI`, or `Linux Release` failure (push/schedule runs only) | Creates a GitHub issue when a monitored main-branch workflow fails (deduplicates per workflow) |
 | `actions-storage-cleanup.yml` | Push to `main` (primary), daily 05:00 UTC backstop, manual | Purges all GHA caches and artifacts older than 3 days to protect org storage quota |
 
-`.github/dependabot.yml` (not a workflow) enables weekly `github-actions`-ecosystem dependency updates, grouped into a single PR — see [ci-cd.md](ci-cd.md#githubdependabotyml--dependency-updates).
+`.github/dependabot.yml` (not a workflow) enables weekly dependency updates for the `github-actions` (`/`) and `cargo` (`/linux`) ecosystems, each grouped into a single PR — see [ci-cd.md](ci-cd.md#githubdependabotyml--dependency-updates).
 
 All macOS jobs start with a shared `Select Xcode` step that resolves the newest installed Xcode on the runner and exports a job-scoped `DEVELOPER_DIR` (no `sudo`, no machine-global `xcode-select` — the two Macs are shared with namey and bonkus CI). PR and main workflows use `cancel-in-progress: true`; the release workflow uses `cancel-in-progress: false`. Build/test/quality jobs run on `[self-hosted, macos, tempo]`; utility jobs (security scans, docs checks, PR cleanup, failure notification) run on `[self-hosted, linux]`. Changes are batched and the number of PRs is kept low to reduce queue wait times.
 
