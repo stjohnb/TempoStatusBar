@@ -130,7 +130,7 @@ The status bar item's context menu is assembled in `AppDelegate.setupStatusBar()
 7. *(separator)*
 8. Quit
 
-`showAbout()` displays an `NSAlert` (not `NSApp.orderFrontStandardAboutPanel`) because the app runs as a `LSUIElement = YES` agent; `orderFrontStandardAboutPanel` does not reliably render in apps without a standard foreground activation policy. The version string is read from `Bundle.main` keys `CFBundleShortVersionString` (marketing version, e.g. `1.0`) and `CFBundleVersion` (build number).
+`showAbout()` displays an `NSAlert` (not `NSApp.orderFrontStandardAboutPanel`) because the app runs as a `LSUIElement = YES` agent; `orderFrontStandardAboutPanel` does not reliably render in apps without a standard foreground activation policy. The version string shown is the build-time `appVersion` constant — see [Version String Generation](#version-string-generation) below.
 
 ### Settings View Behavior
 
