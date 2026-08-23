@@ -7,6 +7,10 @@ Tempo Cloud). Read `docs/OVERVIEW.md` first for full architecture detail;
 also `docs/api-design.md` for Tempo API work and `docs/ci-cd.md` for
 workflow changes.
 
+All changes land via pull request; nothing is pushed directly to the
+default branch — see [docs/claws-automation.md](docs/claws-automation.md)
+for the full convention.
+
 ## Repo layout
 
 Source files live **flat at the repo root** — no `Sources/` directory:
