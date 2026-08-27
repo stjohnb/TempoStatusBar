@@ -128,9 +128,7 @@ jobs:
         \`\`\`sh
         cd $DIR
         install -Dm755 tempo-statusbar ~/.local/bin/tempo-statusbar
-        tempo-statusbar init
-        \$EDITOR ~/.config/tempo-statusbar/config.toml    # set jira_url
-        tempo-statusbar set-token
+        tempo-statusbar set-credentials    # prompts for URL, username and token
         \`\`\`
 
         For autostart, the tarball ships both a \`.desktop\` entry and a systemd

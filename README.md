@@ -69,9 +69,10 @@ the macOS Keychain, never in plain text.
 `linux/` holds a native Rust tray app — a separate implementation, not a port.
 It speaks the freedesktop **StatusNotifierItem** protocol, calls the same two
 Tempo endpoints, and uses the same thresholds and colours as the macOS app.
-Configuration is a `config.toml` plus `init` / `set-token` subcommands rather
-than a settings GUI; the API token lives in the Secret Service, or comes from
-`TEMPO_API_TOKEN` or a `token_command`.
+Configuration is `set-credentials` / `show-config` / `init` subcommands rather
+than a settings GUI; the Jira URL, username and API token live together in the
+Secret Service, with an optional `config.toml` to override them, and the token
+can also come from `TEMPO_API_TOKEN` or a `token_command`.
 
 **GNOME needs an extension.** GNOME Shell shows no StatusNotifierItem without
 `gnome-shell-extension-appindicator` (the "AppIndicator and KStatusNotifierItem
@@ -92,9 +93,7 @@ sha256sum -c tempo-statusbar-<version>-x86_64-linux.tar.gz.sha256
 tar xzf tempo-statusbar-<version>-x86_64-linux.tar.gz
 cd tempo-statusbar-<version>-x86_64-linux
 install -Dm755 tempo-statusbar ~/.local/bin/tempo-statusbar
-tempo-statusbar init
-$EDITOR ~/.config/tempo-statusbar/config.toml   # set jira_url
-tempo-statusbar set-token
+tempo-statusbar set-credentials   # prompts for URL, username and token
 ```
 
 The binary is statically linked against musl: no runtime dependencies, no

@@ -11,7 +11,7 @@ user-visible behaviour (thresholds, colours, day counting).
 linux/Cargo.toml     Crate manifest
 linux/src/main.rs    CLI (clap), tray implementation, poll loop
 linux/src/tempo.rs   Jira/Tempo REST client and models
-linux/src/config.rs  Config file and API-token resolution
+linux/src/config.rs  Config file, Secret Service blob, token resolution
 linux/src/state.rs   Severity/Status model and colours
 linux/src/icon.rs    Procedural 24x24 ARGB tray icon
 linux/packaging/     .desktop entry, systemd user unit, INSTALL.md (shipped in
@@ -27,7 +27,7 @@ or an `mpsc` message from a menu item.
 |---|---|---|
 | Tray | `NSStatusBar` | StatusNotifierItem over D-Bus (`ksni`) |
 | State | `WorklogStateManager` (`@MainActor`, Combine) | `Status` value recomputed each poll cycle |
-| Credentials | Keychain (`CredentialManager`) | Secret Service / `token_command` / env var |
+| Credentials | Keychain (`CredentialManager`) | Secret Service blob / `token_command` / env var |
 | Settings | `SettingsView` popover | `config.toml` + CLI |
 | Errors | `TempoError` / `CredentialError` | same-named `thiserror` enums |
 
@@ -63,11 +63,63 @@ one does.
 | GNOME | GNOME Keyring | The canonical implementation; works out of the box |
 | KDE | KWallet / `ksecretd` | Secret Service support since KDE Frameworks 5.97 (Aug 2022); Plasma 6 ships `ksecretd` |
 | Any | KeePassXC | Enable its Secret Service integration |
-| i3 / sway / headless | none | No provider on the bus — use `token_command` or `TEMPO_API_TOKEN` |
+| i3 / sway / headless | none | No provider on the bus — use `token_command` or `TEMPO_API_TOKEN`, and set `jira_url` in the config file |
 
 The Secret Service may prompt to unlock its collection on first read after
 login. A locked or denied collection is reported as a keyring error, which
-becomes a gray tray state with a hint — never a panic.
+becomes a gray tray state with a hint — never a panic. Since 0.2.0 that error
+blocks the Jira URL as well as the token, but it stays non-fatal: the tray shows
+the error and retries at the next poll interval rather than exiting.
+
+### The credentials blob
+
+`tempo-statusbar set-credentials` stores one JSON object under service
+`tempo-statusbar`, account `credentials`:
+
+| Key | Meaning |
+|---|---|
+| `jira_url` | Base URL of the Jira instance |
+| `account_id` | Jira Server username; `null` to resolve from `/myself` |
+| `api_token` | The Jira API token |
+| `warning_threshold` | Days before the orange state; `null` for the default |
+
+This mirrors the macOS Keychain payload (`CredentialManager.swift`, service
+`com.stjohnsoftware.TempoStatusBarApp`, account `credentials`), in snake_case.
+The two stores never interoperate — they are separate machines' secret stores
+holding the same four fields.
+
+`tempo-statusbar set-token` is a read-modify-write of the blob's `api_token`
+alone, so it never clobbers a stored `jira_url` or `account_id`.
+
+The pre-0.2 entry under account `api-token` — a bare token, no JSON — is still
+read as the last token fallback, and is never written or deleted. An install
+that predates the blob keeps working untouched.
+
+`secret-tool lookup service tempo-statusbar username api-token` therefore
+returns nothing on a fresh install; the blob is under `username credentials`.
+Note that reading it **prints the API token inside the JSON**, so do not run it
+where the output is logged or shared.
+
+### Resolution rules
+
+The config file is an override layer, applied per field:
+
+- `jira_url`, `account_id` and `warning_threshold`: a non-blank value in
+  `config.toml` wins; otherwise the blob supplies it. A blank or whitespace
+  value counts as absent on both sides.
+- `poll_interval_secs` and `token_command` are **file-only** — they are
+  settings, not credentials, and the blob has no place to put them.
+- The keyring is **not consulted at all** when the file already supplies both
+  `jira_url` and a token source (`token_command`, or `TEMPO_API_TOKEN` in the
+  environment), so a box with no secrets daemon never touches D-Bus. The cost:
+  in that configuration a keyring-stored `account_id` or `warning_threshold`
+  is ignored.
+- With no `jira_url` on either side, the tray shows an error naming the config
+  path and `set-credentials`.
+
+`tempo-statusbar show-config` prints the resolved values, annotated with where
+each came from, plus whether a token was found and from which source. It never
+prints the token, nor the `token_command` string.
 
 ### Token resolution order
 
@@ -75,29 +127,33 @@ becomes a gray tray state with a hint — never a panic.
 2. `token_command` from the config file, if set. Run as `sh -c <command>`;
    trimmed stdout is the token. Works with `pass show tempo`, `gopass`,
    `secret-tool`, `op read`, and anything else that prints a secret.
-3. The Secret Service, under service `tempo-statusbar`, account `api-token`.
+3. `api_token` from the credentials blob (service `tempo-statusbar`, account
+   `credentials`).
+4. The legacy pre-0.2 entry (service `tempo-statusbar`, account `api-token`).
 
 `token_command` stdout is never logged and never appears in an error message —
 only a bounded excerpt of stderr does.
 
-`tempo-statusbar set-token` writes to the Secret Service and, on failure,
-prints guidance naming the providers above and the two fallbacks, rather than a
-raw D-Bus error.
+`tempo-statusbar set-credentials` and `set-token` write to the Secret Service
+and, on failure, print guidance naming the providers above and the two
+fallbacks, rather than a raw D-Bus error.
 
 ## Configuration
 
-`tempo-statusbar init` writes a commented sample to
+Nothing in `config.toml` is required, and the file may be absent entirely —
+`set-credentials` alone is enough to run the app. `tempo-statusbar init` writes
+a fully commented-out sample to
 `$XDG_CONFIG_HOME/tempo-statusbar/config.toml` (usually
-`~/.config/tempo-statusbar/config.toml`). It refuses to overwrite an existing
-file.
+`~/.config/tempo-statusbar/config.toml`) for the cases that need an override.
+It refuses to overwrite an existing file.
 
-| Field | Default | Meaning |
-|---|---|---|
-| `jira_url` | required | Base URL of the Jira instance |
-| `account_id` | unset | Jira Server username; resolved from `/myself` when unset |
-| `warning_threshold` | 7 | Days before the orange state |
-| `poll_interval_secs` | 3600 | Poll interval (floored at 60) |
-| `token_command` | unset | Shell command printing the token on stdout |
+| Field | Default | Default source | Meaning |
+|---|---|---|---|
+| `jira_url` | optional | Secret Service | Base URL of the Jira instance |
+| `account_id` | optional | Secret Service | Jira Server username; resolved from `/myself` when unset everywhere |
+| `warning_threshold` | 7 | Secret Service | Days before the orange state |
+| `poll_interval_secs` | 3600 | file only | Poll interval (floored at 60) |
+| `token_command` | unset | file only | Shell command printing the token on stdout |
 
 The config file is re-read every poll cycle, so edits take effect at the next
 refresh without a restart.
@@ -200,7 +256,7 @@ architectures build from source with
 
 Deliberately not implemented:
 
-- **No settings GUI.** Config file plus `init` / `set-token` subcommands.
+- **No settings GUI.** Config file plus `init` / `set-credentials` / `set-token` / `show-config` subcommands.
 - **No update checker.** Install and update through nix, your distro, or by
   downloading a newer `linux-v*` release.
 - **No distro packaging.** No AUR, Flatpak or `.deb`; the release artifact is a
