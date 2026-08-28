@@ -306,6 +306,21 @@ pub fn store_credentials(creds: &StoredCredentials) -> Result<(), CredentialErro
     Ok(())
 }
 
+/// Removes the credentials blob. The legacy `api-token` entry is deliberately
+/// left alone — see `docs/linux.md`. Deleting an entry that is already gone is
+/// success, so a second click cannot report a spurious failure.
+///
+/// Only the settings window clears credentials; the CLI deliberately has no
+/// equivalent, so this is unused in a build without the GUI.
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub fn delete_credentials() -> Result<(), CredentialError> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(CredentialError::Keyring(error)),
+    }
+}
+
 /// The pre-0.2 bare-token entry. Read-only: nothing ever writes or deletes it,
 /// so an install that predates the blob keeps working.
 fn load_legacy_token() -> Result<Option<String>, CredentialError> {

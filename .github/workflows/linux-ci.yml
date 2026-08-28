@@ -18,8 +18,9 @@ jobs:
   build-and-test:
     name: Build and Test (Rust)
     runs-on: [self-hosted, linux]
-    # The first run pulls the Rust toolchain closure into the nix store.
-    timeout-minutes: 30
+    # The first run pulls the Rust toolchain and GTK4 closures into the nix
+    # store and compiles the gtk4-rs bindings from scratch.
+    timeout-minutes: 45
     permissions:
       contents: read
       pull-requests: write
@@ -49,6 +50,12 @@ jobs:
 
     - name: Build (release)
       run: nix $NIX_FLAGS develop ..# --command cargo build --release
+
+    # `nix build .#static` builds with --no-default-features because GTK cannot
+    # be statically linked. This is the cheap guard that a PR cannot break the
+    # published release artifact before it is merged.
+    - name: Build (no GUI — mirrors the static release build)
+      run: nix $NIX_FLAGS develop ..# --command cargo build --release --no-default-features
 
     - name: Comment on PR with Linux build status
       # Fork PRs and Dependabot runs get a read-only GITHUB_TOKEN and can't

@@ -117,7 +117,7 @@ fn set(pixels: &mut [u32], x: i32, y: i32, color: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{Severity, COLOR_NEUTRAL, COLOR_OVERDUE};
+    use crate::state::{Severity, WorklogDetail, COLOR_NEUTRAL, COLOR_OVERDUE};
 
     fn pixel_at(icon: &ksni::Icon, x: i32, y: i32) -> u32 {
         let offset = ((y * icon.width + x) * 4) as usize;
@@ -137,7 +137,7 @@ mod tests {
         let icon = render(&Status::Days {
             days: 30,
             severity: Severity::Overdue,
-            issue_key: None,
+            detail: WorklogDetail::default(),
         });
         assert_eq!(pixel_at(&icon, 0, 0), TRANSPARENT);
         assert_eq!(pixel_at(&icon, SIZE - 1, SIZE - 1), TRANSPARENT);
@@ -161,7 +161,7 @@ mod tests {
             let icon = render(&Status::Days {
                 days,
                 severity: Severity::Ok,
-                issue_key: None,
+                detail: WorklogDetail::default(),
             });
             assert!(
                 icon.data

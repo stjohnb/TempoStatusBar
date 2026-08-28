@@ -38,6 +38,35 @@ impl Severity {
     }
 }
 
+/// The parts of a worklog the status window shows, pre-formatted so the GUI
+/// layer stays free of date and duration logic. Mirrors `ContentView.swift`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorklogDetail {
+    pub issue_key: Option<String>,
+    pub issue_summary: Option<String>,
+    /// Pre-formatted "2h 30m" / "45m"; empty when zero.
+    pub time_spent: String,
+    /// Pre-formatted "%-d %b %Y, %H:%M" in local time.
+    pub date_started: Option<String>,
+    pub comment: Option<String>,
+}
+
+/// Hours and minutes, as `formatTimeSpent` in `ContentView.swift`. A
+/// non-positive duration has nothing to show, so it renders empty and the
+/// status window hides the row.
+pub fn format_time_spent(seconds: i64) -> String {
+    if seconds <= 0 {
+        return String::new();
+    }
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else {
+        format!("{minutes}m")
+    }
+}
+
 /// What the tray is currently showing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
@@ -50,7 +79,7 @@ pub enum Status {
     Days {
         days: i64,
         severity: Severity,
-        issue_key: Option<String>,
+        detail: WorklogDetail,
     },
 }
 
@@ -79,7 +108,11 @@ impl Status {
         match self {
             Status::Days {
                 days,
-                issue_key: Some(key),
+                detail:
+                    WorklogDetail {
+                        issue_key: Some(key),
+                        ..
+                    },
                 ..
             } => format!("Last worklog: {days} day{} ago ({key})", plural(*days)),
             _ => self.tooltip(),
@@ -124,7 +157,7 @@ mod tests {
             Status::Days {
                 days: 1,
                 severity: Severity::Ok,
-                issue_key: None
+                detail: WorklogDetail::default()
             }
             .color(),
             COLOR_OK
@@ -136,12 +169,12 @@ mod tests {
         let one = Status::Days {
             days: 1,
             severity: Severity::Ok,
-            issue_key: None,
+            detail: WorklogDetail::default(),
         };
         let two = Status::Days {
             days: 2,
             severity: Severity::Ok,
-            issue_key: None,
+            detail: WorklogDetail::default(),
         };
         assert_eq!(one.tooltip(), "Last worklog: 1 day ago");
         assert_eq!(two.tooltip(), "Last worklog: 2 days ago");
@@ -152,8 +185,34 @@ mod tests {
         let status = Status::Days {
             days: 3,
             severity: Severity::Ok,
-            issue_key: Some("TEMPO-1".into()),
+            detail: WorklogDetail {
+                issue_key: Some("TEMPO-1".into()),
+                ..WorklogDetail::default()
+            },
         };
         assert_eq!(status.menu_line(), "Last worklog: 3 days ago (TEMPO-1)");
+    }
+
+    #[test]
+    fn menu_line_falls_back_to_the_tooltip_without_an_issue_key() {
+        let status = Status::Days {
+            days: 3,
+            severity: Severity::Ok,
+            detail: WorklogDetail {
+                issue_summary: Some("Work".into()),
+                ..WorklogDetail::default()
+            },
+        };
+        assert_eq!(status.menu_line(), "Last worklog: 3 days ago");
+    }
+
+    #[test]
+    fn format_time_spent_matches_the_macos_formatter() {
+        assert_eq!(format_time_spent(9000), "2h 30m");
+        assert_eq!(format_time_spent(3600), "1h 0m");
+        assert_eq!(format_time_spent(2700), "45m");
+        assert_eq!(format_time_spent(59), "0m");
+        assert_eq!(format_time_spent(0), "");
+        assert_eq!(format_time_spent(-1), "");
     }
 }

@@ -47,11 +47,7 @@ pub struct UserInfo {
 #[serde(rename_all = "camelCase")]
 pub struct Worklog {
     pub date_started: String,
-    /// Decoded for parity with the macOS `Worklog` model; unused here.
-    #[allow(dead_code)]
     pub time_spent_seconds: i64,
-    /// Decoded for parity with the macOS `Worklog` model; unused here.
-    #[allow(dead_code)]
     pub comment: Option<String>,
     pub issue: Option<WorklogIssue>,
 }
@@ -60,8 +56,6 @@ pub struct Worklog {
 #[serde(rename_all = "camelCase")]
 pub struct WorklogIssue {
     pub key: Option<String>,
-    /// Decoded for parity with the macOS `WorklogIssue` model; unused here.
-    #[allow(dead_code)]
     pub summary: Option<String>,
 }
 

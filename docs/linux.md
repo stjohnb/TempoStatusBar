@@ -14,21 +14,27 @@ linux/src/tempo.rs   Jira/Tempo REST client and models
 linux/src/config.rs  Config file, Secret Service blob, token resolution
 linux/src/state.rs   Severity/Status model and colours
 linux/src/icon.rs    Procedural 24x24 ARGB tray icon
+linux/src/uimodel.rs GTK-free validation and presentation rules (unit-tested)
+linux/src/gui.rs     GTK4 status and settings windows (`gui` feature)
 linux/packaging/     .desktop entry, systemd user unit, INSTALL.md (shipped in
                      the release tarball)
 flake.nix            Dev shell and packages (Linux only)
 ```
 
 There is no async runtime: the tray runs on a background thread via `ksni`'s
-blocking API and the poll loop owns the main thread, waking on either a timeout
-or an `mpsc` message from a menu item.
+blocking API and the poll loop wakes on either a timeout or an `mpsc` message
+from a menu item. Without the GUI the poll loop owns the main thread; with it,
+GTK owns the main thread — GTK objects are not `Send` — and the poll loop moves
+to a worker, publishing each status through an `Arc<Mutex<Status>>` the window
+reads on a 200 ms tick.
 
 | Concern | macOS | Linux |
 |---|---|---|
 | Tray | `NSStatusBar` | StatusNotifierItem over D-Bus (`ksni`) |
 | State | `WorklogStateManager` (`@MainActor`, Combine) | `Status` value recomputed each poll cycle |
 | Credentials | Keychain (`CredentialManager`) | Secret Service blob / `token_command` / env var |
-| Settings | `SettingsView` popover | `config.toml` + CLI |
+| Settings | `SettingsView` popover | GTK4 settings window, `config.toml` + CLI |
+| Status detail | `ContentView` popover | GTK4 status window |
 | Errors | `TempoError` / `CredentialError` | same-named `thiserror` enums |
 
 `TempoError` is case-for-case with the Swift enum apart from `DecodeFailed`.
@@ -158,6 +164,53 @@ It refuses to overwrite an existing file.
 The config file is re-read every poll cycle, so edits take effect at the next
 refresh without a restart.
 
+## GUI
+
+Source and nix builds ship two native GTK4 windows, opened from the tray menu's
+**Show Status** and **Settings…** items or from `tempo-statusbar settings`.
+
+The **status window** mirrors the macOS `ContentView` popover: the day count, a
+dot in the severity colour, the tooltip line, and — when there is a worklog —
+its issue key and summary, time spent, date and comment. Rows with nothing in
+them are hidden rather than shown empty. With no credentials it offers an
+**Open Settings** button instead. It repaints on its own as poll cycles land;
+**Refresh** asks for one immediately.
+
+The **settings window** mirrors `SettingsView`: Jira URL, API token, account ID
+with an **Auto-detect** button, and the warning threshold, plus **Test
+Connection**, **Save**, and a separated **Clear Stored Credentials** behind a
+confirmation. Save writes the same Secret Service blob `set-credentials` writes,
+then triggers an immediate refresh.
+
+Three things are worth knowing:
+
+- **The stored API token is never displayed.** The field renders empty every
+  time the window opens; leaving it blank keeps whatever is stored, and typing
+  in it replaces it. Nothing reads the token back out into a widget.
+- **`config.toml` still wins per field.** Saving a `jira_url` that the file also
+  sets changes the blob but not the running app, so the window puts an amber
+  note under any field the file shadows. The app never rewrites `config.toml` —
+  that would destroy the user's comments. `poll_interval_secs` and
+  `token_command` remain file-only and the window says so.
+- **Secret Service writes and Jira calls run off the GTK thread.** An unlock
+  prompt or a Jira instance behind a disconnected VPN can block for tens of
+  seconds; the window stays responsive and the triggering button is disabled
+  until the result lands.
+
+Colour, type and motion choices are recorded in [DESIGN.md](DESIGN.md).
+
+**The published static tarball has no GUI.** It is built
+`--no-default-features` (see [Releases](#releases)), because GTK cannot be
+statically linked. On that binary the tray menu keeps its original three items,
+`tempo-statusbar settings` exits non-zero with a pointer to
+`set-credentials`, and configuration goes through the CLI and `config.toml`.
+Install from nix — or build from source — for the GUI.
+
+If GTK cannot open a display (no `DISPLAY`, no `WAYLAND_DISPLAY`), the app
+prints `No display available; running without the GUI.` and carries on as a
+tray, which is the sensible behaviour for a systemd user unit that starts
+before the session is up.
+
 ## Status display
 
 Severity thresholds and colours match the macOS app exactly:
@@ -188,6 +241,8 @@ cd linux
 nix develop ..# --command cargo test
 nix develop ..# --command cargo clippy --all-targets -- -D warnings
 nix develop ..# --command cargo build --release
+# What `nix build .#static` compiles — no GTK in the dependency graph.
+nix develop ..# --command cargo build --release --no-default-features
 ```
 
 Or `nix build` from the repo root for the packaged binary, or `nix run` to
@@ -223,6 +278,16 @@ cert store and no `SSL_CERT_FILE`), `ksni` uses its pure-Rust zbus backend (no
 only crate with C/asm and it builds for musl. Swapping any of those silently
 breaks the static build — `linux/Cargo.toml` carries the same warning.
 
+The GTK4 GUI is the reason the crate has a `gui` feature at all. No Rust GUI
+toolkit survives static linking — GTK, Qt and FLTK link C libraries, and every
+winit-based stack `dlopen`s libX11/libwayland/libxkbcommon, which a static
+binary cannot do. So `packages.static` sets `buildNoDefaultFeatures`, dropping
+gtk4 out of the dependency graph entirely, while `packages.default` builds it.
+`Cargo.lock` listing gtk4 is harmless: `buildRustPackage` vendors every locked
+crate but compiles only what the feature set selects. Nothing behind `gui` may
+ever move into the default dependency set. `linux-ci.yml` builds
+`--no-default-features` on every PR as the guard.
+
 `.github/workflows/linux-release.yml` fires on pushes to `main` touching
 `linux/**`, `flake.nix` or `flake.lock` and:
 
@@ -256,7 +321,11 @@ architectures build from source with
 
 Deliberately not implemented:
 
-- **No settings GUI.** Config file plus `init` / `set-credentials` / `set-token` / `show-config` subcommands.
+- **No GUI in the downloadable binary.** The GTK4 windows ship in source and
+  nix builds only; the published static tarball is tray plus CLI. See
+  [GUI](#gui).
+- **No Launch at Login toggle.** There is no cross-desktop equivalent of
+  `SMAppService`; the systemd user unit in `linux/packaging/` covers it.
 - **No update checker.** Install and update through nix, your distro, or by
   downloading a newer `linux-v*` release.
 - **No distro packaging.** No AUR, Flatpak or `.deb`; the release artifact is a

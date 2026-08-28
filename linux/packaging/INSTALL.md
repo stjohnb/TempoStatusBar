@@ -22,7 +22,13 @@ export PATH="$HOME/.local/bin:$PATH"    # in ~/.profile, ~/.bashrc or ~/.zshrc
 
 ```sh
 tempo-statusbar set-credentials    # prompts, stores in the freedesktop Secret Service
+tempo-statusbar settings           # GTK4 window, or the tray's "Settings…" item
 ```
+
+**This tarball has no GUI**: `settings` exits with a message, and the tray menu
+has no window items. That is deliberate — GTK cannot be statically linked, so
+the fully static binary is tray plus CLI. Install from nix, or build from
+source, if you want the windows.
 
 This asks for the Jira URL, your Jira username (blank to resolve it from
 `/rest/api/2/myself`) and the API token, and stores all three as one entry in
