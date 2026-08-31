@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TempoStatusBarApp is a macOS menu bar application that monitors Jira Tempo worklog activity. It polls the Tempo REST API hourly and displays in the menu bar how many days have elapsed since the user's last worklog entry, using color-coded status indicators so users can immediately see if they are overdue.
+TempoStatusBar is a repository for a signed macOS menu bar app and a separate Linux tray companion that monitor Jira Tempo Server/Data Center worklog activity. The macOS app is the primary product; the Linux crate mirrors the same API contract and status semantics for Linux desktops without sharing implementation code.
 
 ## Architecture
 
@@ -33,9 +33,19 @@ a StatusNotifierItem tray (via `ksni`) that polls the same two Tempo endpoints
 and applies the same severity thresholds and colours. It is not a port of the
 Swift code and shares no source with it — the macOS app is unchanged by its
 existence. Credentials come from the freedesktop Secret Service, a
-`token_command`, or `TEMPO_API_TOKEN`; there is no settings GUI and no update
-checker. See [linux.md](linux.md) for the architecture, the desktop-environment
-credential matrix, and the deliberate scope cuts.
+`token_command`, or `TEMPO_API_TOKEN`; the Linux app now has native GTK status
+and settings windows, but still has no update checker. See [linux.md](linux.md)
+for the architecture, config precedence rules, desktop-environment credential
+matrix, and deliberate scope cuts.
+
+## Documentation Map
+
+- [api-design.md](api-design.md): Tempo Server/Data Center endpoints, auth, identifier resolution, and API-layer error handling.
+- [ci-cd.md](ci-cd.md): GitHub Actions workflows, self-hosted runner constraints, signing, notarization, S3 release storage, and release automation.
+- [linux.md](linux.md): Linux crate architecture, config and credential resolution, GTK windows, static release constraints, and tray-specific gotchas.
+- [DESIGN.md](DESIGN.md): Linux GTK presentation rules only.
+- [requirements.md](requirements.md): Cross-cutting owner requirements that are not owned by a single subsystem doc.
+- [claws-automation.md](claws-automation.md): Automatically maintained repo automation conventions; do not edit it manually.
 
 ### Key Classes
 
@@ -279,7 +289,9 @@ CI release and PR builds always pass `MARKETING_VERSION=<tag-version>` on the `x
 
 ## Configuration
 
-All user-facing configuration is set via `SettingsView`:
+User-facing configuration is platform-specific.
+
+### macOS app
 
 | Field | Description | Default |
 |---|---|---|
@@ -289,7 +301,22 @@ All user-facing configuration is set via `SettingsView`:
 | Warning Threshold | Days before warning state activates | 7 |
 | Launch at Login | Toggle in "App Settings" section; macOS 13+ only (disabled with explanatory note on macOS 12) | off |
 
-No environment variables or build-time configuration. There are no hardcoded endpoints beyond the relative API paths. Update checks are unauthenticated against a public GitHub repo — no GitHub token field exists in Settings (removed in #161).
+macOS credentials are stored in the Keychain JSON blob under service `com.stjohnsoftware.TempoStatusBarApp`, account `credentials`. There are no macOS runtime environment variables; update checks are unauthenticated against the public GitHub repo, so the old GitHub token setting is gone.
+
+### Linux app
+
+The Linux crate resolves configuration per field from `config.toml`, Secret Service, and one environment variable:
+
+| Setting | Source(s) | Notes |
+|---|---|---|
+| `jira_url` | `config.toml`, Secret Service | file overrides stored value when non-blank |
+| `account_id` | `config.toml`, Secret Service | blank means resolve from `/myself` |
+| `warning_threshold` | `config.toml`, Secret Service | defaults to `7` |
+| `poll_interval_secs` | `config.toml` only | defaults to `3600`, floored to `60` |
+| `token_command` | `config.toml` only | shell command whose stdout is the token |
+| `TEMPO_API_TOKEN` | environment | highest-precedence Linux token source |
+
+There are no hardcoded API hosts beyond the relative Jira and Tempo paths. See [linux.md](linux.md) for the exact precedence rules and for the static-release caveat: the published Linux tarball intentionally omits the GTK GUI because GTK cannot be statically linked into the `.#static` build.
 
 ## Automation
 

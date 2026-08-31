@@ -5,6 +5,11 @@ a port of the Swift code. The macOS app is mature, signed and notarized, so it
 stays exactly as it is; the two apps share only the Tempo API contract and the
 user-visible behaviour (thresholds, colours, day counting).
 
+## Product constraints
+
+- The owner explicitly wanted the Linux app to reproduce the macOS experience with a native GUI for both settings and status display, not a localhost web page. That is why `linux/src/gui.rs` ships GTK4 windows and why planning work for this crate should start from "native tray app" rather than browser-hosted UI.
+- The published Linux release artifact must remain the fully static `.#static` build. Because GTK cannot be statically linked into that musl target, the public tarball intentionally stays tray+CLI only while nix/source builds keep the GUI feature enabled.
+
 ## Architecture
 
 ```
@@ -181,6 +186,9 @@ with an **Auto-detect** button, and the warning threshold, plus **Test
 Connection**, **Save**, and a separated **Clear Stored Credentials** behind a
 confirmation. Save writes the same Secret Service blob `set-credentials` writes,
 then triggers an immediate refresh.
+
+Window sizes are independent of the macOS popovers: `gui.rs` currently uses
+`380x300` for the status window and `420x660` for the settings window.
 
 Three things are worth knowing:
 
