@@ -1,7 +1,10 @@
 # Design
 
-Covers the Linux app's GTK4 windows (`linux/src/gui.rs`). The macOS app is
-SwiftUI and follows the platform's own conventions; nothing here applies to it.
+**Depth: Deep dive.** Read this only when touching the Linux app's GTK4
+windows' colour, type, or motion choices (`linux/src/gui.rs`). For the GTK4
+crate's architecture and behavior, read [linux.md](linux.md) instead. The
+macOS app is SwiftUI and follows the platform's own conventions; nothing
+here applies to it.
 
 ## Principle: stay native
 

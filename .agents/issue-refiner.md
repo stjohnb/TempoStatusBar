@@ -22,9 +22,10 @@ work and `docs/ci-cd.md` for workflow changes.
   and the SwiftUI `.frame(...)` in the view both need updating.
 - For credential changes, account for `.credentialsChanged` notifications
   and the Keychain service name (`com.stjohnsoftware.TempoStatusBarApp`).
-- For CI workflow changes, macOS jobs run on GitHub-hosted `macos-15` and
-  Linux jobs on `[self-hosted, linux]`. macOS CI minutes are limited and
-  billed, so keep workflow changes lean and batch work into fewer PRs.
+- For CI workflow changes, macOS jobs run on `[self-hosted, macos, tempo]`
+  (shared with bonkus/namey CI — no `sudo`, no machine-global `xcode-select`)
+  and Linux jobs on `[self-hosted, linux]`. Keep workflow changes lean and
+  batch work into fewer PRs to reduce queue wait on the two shared Macs.
 - For tests, route through `./run_tests.sh`; mock via
   `CredentialManagerProtocol` / `TempoServiceProtocol` / `MockURLProtocol`.
 

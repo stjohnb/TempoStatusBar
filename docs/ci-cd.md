@@ -1,12 +1,17 @@
 # CI/CD
 
+**Depth: Reference.** Read this when changing a GitHub Actions workflow,
+code signing/notarization, S3 release storage, or the shared self-hosted
+runner setup. For app architecture, read [OVERVIEW.md](OVERVIEW.md); for
+Linux-specific release steps, read [linux.md](linux.md#releases).
+
 ## Workflow Files
 
-All workflows live in `.github/workflows/`. Nine workflows cover the full development lifecycle.
+All workflows live in `.github/workflows/`. Eight workflows cover the full development lifecycle.
 
 ### Common Settings (all workflows)
 
-- **Runners:** Self-hosted `[self-hosted, macos, tempo]` for build/test/quality jobs; `[self-hosted, linux]` for security scans, documentation checks, PR cleanup, and failure notification. The `tempo` label pins these jobs to the Mac that does **not** run the real TempoStatusBarApp: signing jobs put a temp keychain into the runner user's keychain search list, and on a Mac where the real app is polling, that triggers keychain-unlock dialogs in the user's session. Machine-level documentation for the two shared Macs — inventory, runner-label semantics, registration and Xcode-install runbooks — is centralised in the nixos-config repo: [docs/macos-runners.md](https://github.com/St-John-Software/nixos-config/blob/main/docs/macos-runners.md).
+- **Runners:** Self-hosted `[self-hosted, macos, tempo]` for build/test/quality jobs; `[self-hosted, linux]` for security scans, documentation checks, and PR cleanup. The `tempo` label pins these jobs to the Mac that does **not** run the real TempoStatusBarApp: signing jobs put a temp keychain into the runner user's keychain search list, and on a Mac where the real app is polling, that triggers keychain-unlock dialogs in the user's session. Machine-level documentation for the two shared Macs — inventory, runner-label semantics, registration and Xcode-install runbooks — is centralised in the nixos-config repo: [docs/macos-runners.md](https://github.com/St-John-Software/nixos-config/blob/main/docs/macos-runners.md).
 - **Xcode:** every macOS job starts with a shared `Select Xcode` step that finds the newest non-beta Xcode under `/Applications` and exports a **job-scoped `DEVELOPER_DIR`**. It deliberately does *not* use `maxim-lobanov/setup-xcode` or `xcode-select`: those change the machine-global active Xcode via `sudo`, and the two Macs are shared with namey and bonkus CI (which use the same step). No job may mutate machine-global state.
 - **Concurrency:** PR and main workflows use `cancel-in-progress: true` to cancel redundant runs; the release workflow uses `cancel-in-progress: false` to avoid interrupting in-flight release builds
 - **DMG storage — S3 via OIDC (#177):** built DMGs are stored in the `tempo-statusbar-releases` S3 bucket (job env `S3_BUCKET`/`S3_REGION`/`DOWNLOAD_BASE`), not as GitHub Release assets — GitHub storage/bandwidth limits were being hit. Jobs authenticate with GitHub OIDC: `permissions: id-token: write` plus `aws-actions/configure-aws-credentials` (SHA-pinned) assuming the IAM role in the `AWS_ROLE_ARN` secret; no static AWS credentials are stored. Fork PRs skip all AWS steps (no OIDC access to the role). Stable releases land at `releases/TempoStatusBarApp-<version>.dmg` (plus a `TempoStatusBarApp-latest.dmg` copy); PR builds at `pr/<N>/TempoStatusBarApp-<version>.dmg`. Both prefixes are public-read over HTTPS. One-time provisioning is handled by [`s3-bootstrap.yml`](#s3-bootstrapyml--s3-bootstrap) (see below).
@@ -132,7 +137,7 @@ failing the build.
 
 | Job | Runner | Description |
 |---|---|---|
-| `release` | `[self-hosted, linux]` | Version gate → `nix build .#static` → static-linkage and version assertions → tarball + `.sha256` → `gh release create linux-vX.Y.Z` |
+| `release` | `[self-hosted, linux]` | Version gate → `nix build .#static` → static-linkage and version assertions → tarball + `.sha256` → `gh release create linux-vX.Y.Z` (gh from the flake's `ci` devShell) |
 
 `concurrency: linux-release` with `cancel-in-progress: false` — two rapid
 merges must not cancel a run that has already created a tag.
@@ -144,7 +149,10 @@ musl stdenv closure and `ring` from source; later runs hit the nix store.
 the single source of truth — rejects anything that is not plain `X.Y.Z`, and
 sets `release=false` with a `::notice::` if `linux-vX.Y.Z` already exists.
 Every later step is `if: steps.gate.outputs.release == 'true'`, so a
-`linux/**` merge without a version bump is a green no-op.
+`linux/**` merge without a version bump is a green no-op. The gate
+distinguishes an HTTP 404 (tag absent) from a `gh` invocation failure and
+fails the job loudly on the latter, rather than treating any non-zero
+`gh api` exit as "tag absent".
 
 Two assertions run before anything is published: `readelf -l | grep -q INTERP`
 fails the job if `.#static` produced a dynamically-linked binary, and
@@ -224,33 +232,9 @@ The final step prints the role ARN to the job summary along with the decommissio
 
 ---
 
-## `notify-failures.yml` — Main Branch Failure Notification
+## Main Branch Failure Monitoring
 
-**Trigger:** `workflow_run` on the `"Main Verification"`, `"Actions Storage Cleanup"`, `"Linux CI"`, and `"Linux Release"` workflows, type `completed`
-
-**Permissions:** `contents: read`, `issues: write`, `actions: read`
-
-**Concurrency:** group `notify-main-failure`, `cancel-in-progress: false`
-
-**Job: `notify`**
-
-Runs on `[self-hosted, linux]`. The job only executes when:
-- `github.event.workflow_run.conclusion == 'failure'`
-- `github.event.workflow_run.head_branch == 'main'`
-- `github.event.workflow_run.event != 'pull_request'`
-
-**Steps:**
-
-1. **Deduplication check** — uses `gh issue list` + `jq` to count open issues with the title `"Build failure: <workflow name>"`. If one already exists, no new issue is created (prevents flood of duplicate issues for repeated failures before anyone fixes the build).
-2. **Dynamic label** — checks whether a `bug` label exists in the repo (`gh label list | grep -qx "bug"`). Only passes `--label bug` to `gh issue create` if the label is present; omits the flag otherwise to avoid a hard failure on repos without that label.
-3. **Issue creation** — creates an issue titled `"Build failure: <workflow name>"` (e.g. `"Build failure: Main Verification"`, `"Build failure: Actions Storage Cleanup"`, or `"Build failure: Linux CI"`) with a body linking to the failed workflow run URL. The title is built from `github.event.workflow_run.name`, so each monitored workflow deduplicates independently.
-
-**Key design points:**
-- The `workflow_run` trigger (rather than a step inside `main-verification.yml`) keeps failure notification fully decoupled from the build workflow. The build workflow does not need to be modified when notification behavior changes.
-- The branch guard (`head_branch == 'main'`) prevents the job from firing on feature-branch runs of the same workflow.
-- `Linux CI` is the only monitored workflow with a `pull_request` trigger; a fork PR pushed from the fork's own `main` branch reports `head_branch == 'main'`, so without the `event != 'pull_request'` clause a failing fork PR run would file a bogus issue — and dedup-by-title would then suppress alerts for a genuine push-to-main failure. The event guard is what keeps fork PR failures from filing issues and poisoning the dedup title.
-- `notify-failures.yml` does **not** include itself in the `workflows:` list — self-referential inclusion would cause the workflow to trigger on its own runs. `PR Verification` is excluded because it is PR-scoped, not a main-branch build; `Release Verification` is excluded because it triggers on the `release` event, where `head_branch` is a tag, never `main`.
-- `cancel-in-progress: false` on the concurrency group ensures back-to-back main failures each get their own issue-creation attempt (though deduplication prevents actual duplicate issues).
+There is no per-repo failure-notification workflow. Main-branch build failures are monitored centrally by Claws' `main-build-monitor` job ([St-John-Software/claws#2778](https://github.com/St-John-Software/claws/issues/2778)), which watches every `push`/`schedule`-triggered run of this repo's workflows on `main`. When a run fails it retries once if the failure looks transient; otherwise it files (or bumps) an issue titled `Build failure: <workflow name>` in this repo, one per workflow, and closes it with a comment once a later run of the same workflow goes green. PR-scoped runs are ignored, so fork PRs cannot file bogus issues. Nothing in this repo needs to change when the monitoring behaviour changes.
 
 ---
 
@@ -264,7 +248,11 @@ Runs on `[self-hosted, linux]`. The job only executes when:
 
 **Job: `purge-caches`**
 
-Runs on `[self-hosted, linux]`. Two steps:
+Runs on `[self-hosted, linux]`. The job now checks out the repo, runs
+`./.github/actions/setup-nix`, and sets a job-level `defaults.run.shell` of
+`nix … develop ${{ github.workspace }}#ci --command bash -euo pipefail {0}`,
+so `gh`/`jq` come from the flake without any change to the step scripts
+themselves. Two steps:
 
 1. **Purge all caches** — `gh cache delete --all --repo ${{ github.repository }} || true`. The `|| true` guard prevents the job from failing when there are no caches to delete (the `gh` CLI exits non-zero on an empty list).
 2. **Delete artifacts older than 3 days** — uses `gh api --paginate` to list all non-expired artifacts, filters for those whose `created_at` is more than 3 days old, and deletes each via `gh api -X DELETE`. Both PR and main `test-results` now use 3-day retention, so a 3-day cutoff deletes no live debugging artifact early. This step exists because legacy DMG artifacts uploaded before DMG distribution moved to per-PR pre-releases carried the 90-day default GitHub retention and accumulated against the org-shared quota (#146).
@@ -344,5 +332,6 @@ The release and PR workflows additionally **notarize and staple** the DMG so Gat
 - **Signing verification in CI** — the "Verify code signature" step asserts both `Authority=Developer ID Application:` and the presence of the `runtime` flag in the signature. This catches accidental ad-hoc, self-signed, or unhardened builds before the DMG is packaged.
 - **`spctl --assess` over `stapler validate` alone** — the release workflow runs both. `stapler validate` confirms a ticket exists locally; `spctl --assess --type open --context context:primary-signature` is what Gatekeeper actually runs when a user opens the file from a quarantined download. Asserting both protects against the case where stapling appeared to succeed but the ticket doesn't satisfy Gatekeeper.
 - **Separate `linux-v*` tag namespace, GitHub assets not S3** — the Linux tray app releases on its own `linux-vX.Y.Z` line so its cadence is not welded to the macOS `v1.3.x` line, and its tarball is attached to the GitHub release rather than uploaded to S3. The DMG went to S3 because of its size and the macOS quarantine-origin problem (see above); neither applies to a ~10 MB tarball, and release assets are what the Claws snapshot job copies to the public mirror, which is the whole point of publishing it. The version is read from `linux/Cargo.toml` rather than from a tag the operator types, so the tag, the flake and the binary's `--version` cannot disagree — the workflow asserts all three. Because `release-tag.yml` triggers on `on: release` with no tag filter, every one of its jobs needs a `!startsWith(github.event.release.tag_name, 'linux-v')` guard; adding a job there without one restarts the macOS sign+notarize path on Linux releases.
-- **Self-hosted runners — macOS and Linux** — build/test/quality jobs run on `[self-hosted, macos, tempo]`. The Linux-only utility jobs (Trivy scans, docs checks, PR cleanup, failure notification) run on `[self-hosted, linux]` and declare an explicit OS label so they are never scheduled onto a macOS runner.
+- **Self-hosted runners — macOS and Linux** — build/test/quality jobs run on `[self-hosted, macos, tempo]`. The Linux-only utility jobs (Trivy scans, docs checks, PR cleanup) run on `[self-hosted, linux]` and declare an explicit OS label so they are never scheduled onto a macOS runner.
+- **CI dependencies are repo-owned** — the self-hosted Linux runner baseline is `nix`/`git`/`docker` only; `gh`, `jq` and every other CLI must come from `flake.nix`'s `ci` devShell. A bare `gh` in a `[self-hosted, linux]` job dies with exit 127 (issue #218), and `|| true` guards turn that into a silent no-op rather than a visible failure — `actions-storage-cleanup.yml` reported success while purging nothing for weeks. Prefer a job-level `defaults.run.shell` over per-call wrapping for jobs that only shell out to CLI tools; it leaves the scripts untouched.
 - **Real-keychain test skip on CI (`TEMPO_SKIP_KEYCHAIN_TESTS`)** — `CredentialManagerHasStoredCredentialsTests` (see [OVERVIEW.md](OVERVIEW.md#testing)) exercises the real Keychain via `CredentialManager.shared`, including deleting the item under the production service name in `setUp`/`tearDown`. On the shared self-hosted Macs, the runner user's login keychain holds genuine credentials, and headless keychain access blocks on an authorization dialog instead of failing fast (observed as multi-minute test hangs, and once an actual password prompt on the runner's screen). `pr-verification.yml` and `main-verification.yml` set `TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS: "1"` on the "Run unit tests" step; `xcodebuild` only forwards environment variables prefixed `TEST_RUNNER_` into the test-host process (stripping the prefix), so the test suite sees plain `TEMPO_SKIP_KEYCHAIN_TESTS=1`. The gate lives in `setUpWithError` (via `XCTSkipIf`) rather than `setUp`, because it must run before any keychain access is attempted. Locally, without the env var, the suite runs unskipped against the real Keychain as before.

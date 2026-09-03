@@ -40,11 +40,11 @@ Tempo API changes and `docs/ci-cd.md` for workflow changes.
   phase — reject any checked-in `AppVersion.swift`.
 - macOS 12 minimum: `SMAppService` and other 13+ APIs must be gated with
   `if #available(macOS 13, *)`.
-- CI runners: macOS jobs run on GitHub-hosted `macos-15`; Linux jobs run on
-  `[self-hosted, linux]`. Reject `ubuntu-latest`, `ubuntu-22.04`,
-  `windows-latest`, and bare `runs-on: self-hosted`. macOS CI minutes are
-  limited and billed — flag changes that needlessly multiply PRs or re-trigger
-  the macOS jobs.
+- CI runners: macOS jobs run on `[self-hosted, macos, tempo]`; Linux jobs run
+  on `[self-hosted, linux]`. Reject `macos-latest`, `macos-15`,
+  `ubuntu-latest`, `ubuntu-22.04`, `windows-latest`, and bare
+  `runs-on: self-hosted`. The two Macs are shared with bonkus/namey CI — flag
+  changes that needlessly multiply PRs or re-trigger the macOS jobs.
 - Tests must use the DI mocks (`CredentialManagerProtocol`,
   `TempoServiceProtocol`, `MockURLProtocol`) and live in
   `TempoStatusBarAppTests/`. Tests must exit non-zero on failure (see #109).

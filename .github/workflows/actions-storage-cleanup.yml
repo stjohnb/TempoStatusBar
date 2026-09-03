@@ -28,7 +28,18 @@ jobs:
   purge-caches:
     name: Purge Actions Caches and Artifacts
     runs-on: [self-hosted, linux]
+    # `gh` and `jq` come from this repo's flake — the self-hosted Linux runner
+    # baseline is nix/git/docker only (issue #218), so every run step executes
+    # inside the flake's `ci` devShell via the job default shell. That needs
+    # the repo checked out first, which is why this job now starts with a
+    # checkout it didn't previously need.
+    defaults:
+      run:
+        shell: nix --extra-experimental-features nix-command --extra-experimental-features flakes develop ${{ github.workspace }}#ci --command bash -euo pipefail {0}
     steps:
+      - uses: actions/checkout@v7
+      - name: Set up Nix
+        uses: ./.github/actions/setup-nix
       - name: Delete all Actions caches
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,5 +1,11 @@
 # Linux App
 
+**Depth: Reference.** Read this when working on the Linux tray crate
+(`linux/`) — architecture, config/credential resolution, the GTK4 GUI, or
+releases. For GTK visual-design rules specifically, read [DESIGN.md](DESIGN.md)
+instead. For the macOS app, read [OVERVIEW.md](OVERVIEW.md) — the two apps
+share no source.
+
 The Linux tray app lives in `linux/` and is a separate Rust implementation, not
 a port of the Swift code. The macOS app is mature, signed and notarized, so it
 stays exactly as it is; the two apps share only the Tempo API contract and the

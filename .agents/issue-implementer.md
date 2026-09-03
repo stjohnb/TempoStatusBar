@@ -29,10 +29,10 @@ You are implementing approved plans for **TempoStatusBarApp**. Read
 - Popover changes: update `NSPopover.contentSize` in `AppDelegate` to
   match any SwiftUI `.frame(width:height:)` change.
 - `appVersion` is generated; do not check in `AppVersion.swift`.
-- **GitHub Actions runners:** macOS jobs run on GitHub-hosted `macos-15`;
-  Linux jobs run on `[self-hosted, linux]`. macOS CI minutes are limited
-  and billed — minimise PRs and don't re-trigger builds with trivial
-  follow-up commits.
+- **GitHub Actions runners:** macOS jobs run on `[self-hosted, macos, tempo]`
+  (shared with bonkus/namey CI); Linux jobs run on `[self-hosted, linux]`.
+  Minimise PRs and don't re-trigger builds with trivial follow-up commits —
+  the two shared Macs are a limited pool.
 - **Tests:** use `./run_tests.sh` (not raw `xcodebuild test`); mock via
   `CredentialManagerProtocol`, `TempoServiceProtocol`, `MockURLProtocol`.
 - macOS 12 compatibility: gate `SMAppService` and other 13+ APIs with

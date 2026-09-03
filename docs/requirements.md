@@ -1,5 +1,11 @@
 # Cross-Cutting Requirements
 
+**Depth: Reference.** Read this when checking a standing, cross-cutting
+constraint from the repo owner that isn't tied to one subsystem (e.g. a
+GitHub repo setting, a secret-handling policy). For a constraint specific to
+one subsystem, read that doc instead (`OVERVIEW.md`, `api-design.md`,
+`ci-cd.md`, `linux.md`) — this file is not a catch-all.
+
 Standing constraints from the repo owner (@stjohnb) that aren't tied to a
 single subsystem doc. These are current-state requirements, not a history —
 see individual feature docs (`OVERVIEW.md`, `api-design.md`, `ci-cd.md`) for

@@ -1,5 +1,10 @@
 # Agent Notes
 
+**Depth: Reference.** Read this when debugging a host/CI/Claws operational
+issue that isn't explained by [OVERVIEW.md](OVERVIEW.md) or [ci-cd.md](ci-cd.md)
+— e.g. a shared-runner quirk or a Claws-automation behavior. For subsystem
+architecture or workflow design, read those docs instead.
+
 Durable, hard-won facts refined from agent memory stores — operational
 gotchas about the host or the Claws automation that don't belong to any one
 feature doc. Verify against current state before relying on them; they are

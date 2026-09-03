@@ -43,11 +43,23 @@ jobs:
         fi
         TAG="linux-v$VERSION"
         DIR="tempo-statusbar-$VERSION-x86_64-linux"
-        if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+        # `gh` comes from the repo's own devShell — the runner baseline has no
+        # gh (issue #218). Distinguish "tag absent" (HTTP 404) from a broken
+        # gh invocation, which the old `>/dev/null 2>&1` form treated as absent
+        # and so always reported release=true.
+        set +e
+        GH_OUT=$(nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#ci" --command \
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" 2>&1)
+        GH_RC=$?
+        set -e
+        if [ "$GH_RC" -eq 0 ]; then
           echo "::notice::$TAG already exists — bump version in linux/Cargo.toml to publish"
           echo "release=false" >> "$GITHUB_OUTPUT"
-        else
+        elif printf '%s' "$GH_OUT" | grep -q "Not Found"; then
           echo "release=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "::error::gh api failed while checking for tag $TAG (exit $GH_RC): $GH_OUT"
+          exit 1
         fi
         {
           echo "version=$VERSION"
@@ -168,7 +180,8 @@ jobs:
         # `gh release create` creates the tag at --target; no separate tag step.
         # Title equals tag deliberately — release-tag.yml enforces name == tag
         # for the macOS line and the convention is worth keeping uniform.
-        gh release create "${{ steps.gate.outputs.tag }}" \
+        nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#ci" --command \
+          gh release create "${{ steps.gate.outputs.tag }}" \
           --repo "$GITHUB_REPOSITORY" \
           --target "$GITHUB_SHA" \
           --title "${{ steps.gate.outputs.tag }}" \

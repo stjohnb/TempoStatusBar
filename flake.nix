@@ -1,7 +1,10 @@
 {
   description = "TempoStatusBar Linux tray app (Rust) — dev shell and package";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+  # nixos-unstable, not a stable release branch, because the Rust toolchain
+  # this crate needs (1.92+) isn't backported to stable channels yet. Revisit
+  # once a stable release ships it.
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   outputs = { self, nixpkgs }:
     let
@@ -53,6 +56,15 @@
             pkgs.pkg-config
           ];
           buildInputs = [ pkgs.gtk4 pkgs.glib ];
+        };
+
+        # Minimal shell for workflow steps that only shell out to the GitHub
+        # CLI — linux-release.yml's version gate and release publish, and
+        # actions-storage-cleanup.yml. Kept separate from `default` so a
+        # gh-only job never realises the Rust + GTK4 closure. The runner
+        # baseline is nix/git/docker only; `gh` is not on it (issue #218).
+        ci = pkgs.mkShell {
+          packages = [ pkgs.gh pkgs.jq ];
         };
       });
 

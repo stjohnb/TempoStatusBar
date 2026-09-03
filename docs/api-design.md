@@ -1,5 +1,10 @@
 # API Design
 
+**Depth: Reference.** Read this when adding or changing a Tempo/Jira API
+call, debugging auth or identifier-resolution behavior, or handling a new
+HTTP error case. For general app architecture or state management, read
+[OVERVIEW.md](OVERVIEW.md) instead.
+
 ## Overview
 
 TempoStatusBarApp integrates with the **Tempo Server / Data Center** REST API (endpoint path `rest/tempo-timesheets/3/...`), not the newer Tempo Cloud API. This is important context when adding features or debugging — the endpoint paths and authentication model differ between Tempo Cloud and Tempo Server.

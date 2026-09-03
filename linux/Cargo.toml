@@ -25,7 +25,7 @@ gui = ["dep:gtk4"]
 # Native settings/status windows. Optional by design — see the note above.
 # The API level is pinned at GTK 4.12 (August 2023): 4.10 for
 # `gtk::AlertDialog`, 4.12 for `CssProvider::load_from_string`.
-gtk4 = { version = "0.10", optional = true, features = ["v4_12"] }
+gtk4 = { version = "0.11", optional = true, features = ["v4_12"] }
 # Pure-Rust StatusNotifierItem tray (zbus, no libdbus): the "blocking" feature
 # gives a non-async API so the app needs no async runtime.
 ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
