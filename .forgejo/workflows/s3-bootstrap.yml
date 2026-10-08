@@ -4,25 +4,44 @@ name: S3 Bootstrap
 # that the release/PR workflows need for S3 DMG storage (#177):
 #
 #   1. S3 bucket with public-read on releases/* and pr/* prefixes
-#   2. GitHub OIDC identity provider in the AWS account (if missing)
-#   3. IAM role trust-scoped to this repo, with S3 access to the bucket only
+#   2. Forgejo OIDC identity provider (https://www.bstjohn.net/forgejo-oidc)
+#      in the AWS account, if missing
+#   3. IAM role trust-scoped to this repo on the Forgejo issuer only, with S3
+#      access to the bucket only. Re-running rewrites the trust policy, which
+#      is how the existing role moved off GitHub's issuer after the Forgejo
+#      migration; the role name is unchanged so AWS_ROLE_ARN stays valid.
 #
 # Bootstrap credentials: create a temporary IAM user access key with rights to
-# manage S3/IAM, store it as the repo secrets AWS_BOOTSTRAP_ACCESS_KEY_ID and
-# AWS_BOOTSTRAP_SECRET_ACCESS_KEY, run this workflow once, then:
+# manage S3/IAM, store it as the Forgejo Actions secrets
+# AWS_BOOTSTRAP_ACCESS_KEY_ID and AWS_BOOTSTRAP_SECRET_ACCESS_KEY, run this
+# workflow once, then:
 #
-#   - store the printed role ARN as the AWS_ROLE_ARN repo secret
+#   - store the printed role ARN as the AWS_ROLE_ARN Forgejo Actions secret
 #   - revoke the temporary access key and delete both bootstrap secrets
 #
-# Everything after bootstrap authenticates via OIDC (id-token: write +
-# aws-actions/configure-aws-credentials assuming AWS_ROLE_ARN) — no static
-# AWS credentials remain anywhere.
+# Everything after bootstrap authenticates via OIDC (enable-openid-connect +
+# id-token: write + aws-actions/configure-aws-credentials assuming
+# AWS_ROLE_ARN) — no static AWS credentials remain anywhere.
 
-# Triggers removed for the public snapshot — this workflow is intentionally disabled.
-# See the private source repository for the active version.
 on:
   workflow_dispatch:
-permissions: {}
+    inputs:
+      bucket:
+        description: S3 bucket to create/configure
+        required: true
+        default: tempo-statusbar-releases
+      region:
+        description: AWS region for the bucket
+        required: true
+        default: us-east-1
+      role_name:
+        description: IAM role name for Forgejo Actions OIDC (historical name kept so AWS_ROLE_ARN stays valid)
+        required: true
+        default: tempo-statusbar-github-actions
+
+# contents: read for the checkout that the `ci` devShell needs.
+permissions:
+  contents: read
 
 concurrency:
   group: s3-bootstrap
@@ -40,22 +59,24 @@ jobs:
       BUCKET: ${{ inputs.bucket }}
       REGION: ${{ inputs.region }}
       ROLE_NAME: ${{ inputs.role_name }}
+    # `aws` comes from the repo's `ci` devShell — no installer step.
+    defaults:
+      run:
+        shell: nix --extra-experimental-features nix-command --extra-experimental-features flakes develop ${{ github.workspace }}#ci --command bash -euo pipefail {0}
     steps:
+      - name: Checkout code
+        uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Nix
+        uses: ./.github/actions/setup-nix
+
       - name: Check bootstrap credentials are configured
         run: |
           if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
             echo "::error::AWS_BOOTSTRAP_ACCESS_KEY_ID / AWS_BOOTSTRAP_SECRET_ACCESS_KEY secrets are not set."
-            echo "Create a temporary IAM access key with S3+IAM admin rights and store it in those secrets first."
+            echo "Create a temporary IAM access key with S3+IAM admin rights and store it in those Forgejo Actions secrets first."
             exit 1
           fi
-
-      - name: Ensure AWS CLI
-        run: |
-          command -v aws >/dev/null 2>&1 || {
-            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
-            unzip -qo /tmp/awscliv2.zip -d /tmp && sudo /tmp/aws/install
-            rm -rf /tmp/awscliv2.zip /tmp/aws
-          }
           aws --version
 
       - name: Create S3 bucket
@@ -123,21 +144,19 @@ jobs:
           EOF
           )"
 
-      - name: Ensure GitHub OIDC identity provider
+      - name: Ensure Forgejo OIDC identity provider
         run: |
           set -euo pipefail
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          PROVIDER_ARN="arn:aws:iam::$ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
+          PROVIDER_ARN="arn:aws:iam::$ACCOUNT_ID:oidc-provider/www.bstjohn.net/forgejo-oidc"
           if aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$PROVIDER_ARN" >/dev/null 2>&1; then
             echo "OIDC provider already exists: $PROVIDER_ARN"
           else
-            # AWS validates GitHub's cert against its own trusted CA list and
-            # ignores the thumbprint, but older CLI/API versions still require
-            # the parameter — this is GitHub's well-known root thumbprint.
+            # No thumbprint: AWS validates the issuer's certificate against its
+            # own trusted CA list.
             aws iam create-open-id-connect-provider \
-              --url "https://token.actions.githubusercontent.com" \
-              --client-id-list "sts.amazonaws.com" \
-              --thumbprint-list "6938fd4d98bab03faadb97b34396831e3780aea1"
+              --url "https://www.bstjohn.net/forgejo-oidc" \
+              --client-id-list "sts.amazonaws.com"
             echo "Created OIDC provider: $PROVIDER_ARN"
           fi
           echo "PROVIDER_ARN=$PROVIDER_ARN" >> "$GITHUB_ENV"
@@ -145,6 +164,8 @@ jobs:
       - name: Create/update IAM role for this repo
         run: |
           set -euo pipefail
+          # Trusts the Forgejo issuer only; the GitHub issuer is deliberately
+          # dropped now that the GitHub repo is archived.
           TRUST_POLICY=$(cat <<EOF
           {
             "Version": "2012-10-17",
@@ -155,10 +176,10 @@ jobs:
                 "Action": "sts:AssumeRoleWithWebIdentity",
                 "Condition": {
                   "StringEquals": {
-                    "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+                    "www.bstjohn.net/forgejo-oidc:aud": "sts.amazonaws.com"
                   },
                   "StringLike": {
-                    "token.actions.githubusercontent.com:sub": "repo:${{ github.repository }}:*"
+                    "www.bstjohn.net/forgejo-oidc:sub": "repo:St-John-Software/TempoStatusBar:*"
                   }
                 }
               }
@@ -172,7 +193,7 @@ jobs:
               --policy-document "$TRUST_POLICY"
           else
             aws iam create-role --role-name "$ROLE_NAME" \
-              --description "GitHub Actions OIDC role for ${{ github.repository }} S3 releases (#177)" \
+              --description "Forgejo Actions OIDC role for ${{ github.repository }} S3 releases (#177)" \
               --max-session-duration 3600 \
               --assume-role-policy-document "$TRUST_POLICY"
             echo "Created role $ROLE_NAME."
@@ -203,19 +224,13 @@ jobs:
         run: |
           set -euo pipefail
           ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query Role.Arn --output text)
-          {
-            echo "## S3 bootstrap complete"
-            echo ""
-            echo "| Resource | Value |"
-            echo "|---|---|"
-            echo "| Bucket | \`s3://$BUCKET\` ($REGION) |"
-            echo "| Download base | \`https://$BUCKET.s3.$REGION.amazonaws.com\` |"
-            echo "| Role ARN | \`$ROLE_ARN\` |"
-            echo ""
-            echo "### Finish the switch to OIDC"
-            echo ""
-            echo "1. Store the role ARN as the repo secret \`AWS_ROLE_ARN\`."
-            echo "2. Revoke the temporary bootstrap access key in IAM."
-            echo "3. Delete the \`AWS_BOOTSTRAP_ACCESS_KEY_ID\` and \`AWS_BOOTSTRAP_SECRET_ACCESS_KEY\` repo secrets."
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "Role ARN: $ROLE_ARN"
+          echo "S3 bootstrap complete"
+          echo ""
+          echo "  Bucket:        s3://$BUCKET ($REGION)"
+          echo "  Download base: https://$BUCKET.s3.$REGION.amazonaws.com"
+          echo "  Role ARN:      $ROLE_ARN"
+          echo ""
+          echo "Finish the switch to OIDC:"
+          echo "  1. Store the role ARN as the Forgejo Actions secret AWS_ROLE_ARN (unchanged if the role already existed)."
+          echo "  2. Revoke the temporary bootstrap access key in IAM."
+          echo "  3. Delete the AWS_BOOTSTRAP_ACCESS_KEY_ID and AWS_BOOTSTRAP_SECRET_ACCESS_KEY Forgejo Actions secrets."

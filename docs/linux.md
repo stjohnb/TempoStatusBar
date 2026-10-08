@@ -6,15 +6,12 @@ releases. For GTK visual-design rules specifically, read [DESIGN.md](DESIGN.md)
 instead. For the macOS app, read [OVERVIEW.md](OVERVIEW.md) — the two apps
 share no source.
 
+Product requirements: [product/linux-app.md](product/linux-app.md)
+
 The Linux tray app lives in `linux/` and is a separate Rust implementation, not
 a port of the Swift code. The macOS app is mature, signed and notarized, so it
 stays exactly as it is; the two apps share only the Tempo API contract and the
 user-visible behaviour (thresholds, colours, day counting).
-
-## Product constraints
-
-- The owner explicitly wanted the Linux app to reproduce the macOS experience with a native GUI for both settings and status display, not a localhost web page. That is why `linux/src/gui.rs` ships GTK4 windows and why planning work for this crate should start from "native tray app" rather than browser-hosted UI.
-- The published Linux release artifact must remain the fully static `.#static` build. Because GTK cannot be statically linked into that musl target, the public tarball intentionally stays tray+CLI only while nix/source builds keep the GUI feature enabled.
 
 ## Architecture
 
@@ -274,8 +271,9 @@ readelf -l ./result/bin/tempo-statusbar | grep -c INTERP   # expect 0
 because CI has no D-Bus session.
 
 CI runs everything through `nix develop` on `[self-hosted, linux]` — see
-`.github/workflows/linux-ci.yml`. Every tool comes from the repo's own devShell;
-nothing is installed on the runner.
+`.forgejo/workflows/linux-ci.yml` (Forgejo is the canonical repo; CI does not
+use `gh`). Every tool comes from the repo's own devShell; nothing is installed
+on the runner.
 
 ## Releases
 
@@ -302,29 +300,32 @@ crate but compiles only what the feature set selects. Nothing behind `gui` may
 ever move into the default dependency set. `linux-ci.yml` builds
 `--no-default-features` on every PR as the guard.
 
-`.github/workflows/linux-release.yml` fires on pushes to `main` touching
+`.forgejo/workflows/linux-release.yml` fires on pushes to `main` touching
 `linux/**`, `flake.nix` or `flake.lock` and:
 
 1. reads the version from `linux/Cargo.toml` via `nix eval .#static.version`
    and rejects anything that is not plain `X.Y.Z`;
-2. no-ops with a `::notice::` if `linux-vX.Y.Z` already exists — the gate is
-   version-driven, not push-driven, so a `linux/**` merge without a version
-   bump is a green no-op;
+2. no-ops with a `::notice::` if `linux-vX.Y.Z` already exists (checked with
+   `curl` against the Forgejo tags API) — the gate is version-driven, not
+   push-driven, so a `linux/**` merge without a version bump is a green no-op;
 3. builds `.#static`, asserts the ELF has no `INTERP` segment and that
    `tempo-statusbar --version` matches the tag;
 4. publishes `tempo-statusbar-<version>-x86_64-linux.tar.gz` and a `.sha256`
-   as GitHub release assets, together with the `.desktop` entry, the systemd
-   user unit and `INSTALL.md` from `linux/packaging/`.
+   as Forgejo release assets via the Forgejo releases API, together with the
+   `.desktop` entry, the systemd user unit and `INSTALL.md` from
+   `linux/packaging/`.
 
 The tag namespace `linux-v*` is deliberately separate from the macOS `v1.3.x`
 line, so the two release cadences are not welded together. `release-tag.yml`
 (the macOS sign+notarize workflow) has no tag filter of its own, so all three
 of its jobs carry a `!startsWith(github.event.release.tag_name, 'linux-v')`
-guard.
+guard. The guard is load-bearing: Forgejo fires `release: published` when
+`linux-release.yml` publishes its release through the API.
 
 There is no S3 upload — unlike the macOS DMG, the Linux tarball lives on the
-GitHub release itself, which is what the Claws snapshot job copies to the
-public mirror `stjohnb/TempoStatusBar` on the next sync (~02:00).
+Forgejo release itself, which Claws' snapshot job reads through the Forgejo
+releases API and mirrors to the public GitHub repo `stjohnb/TempoStatusBar` on
+the next sync (~02:00).
 
 x86_64 only. Both self-hosted runners are x86_64; `packages.static` is defined
 for `aarch64-linux` too, but nothing builds or publishes it. aarch64 and other

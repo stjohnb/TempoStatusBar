@@ -1,10 +1,10 @@
 ---
 name: issue-implementer
-description: Implement GitHub issue plans for TempoStatusBarApp. Edits Swift/SwiftUI source for a macOS menu bar app, runs ./run_tests.sh, and respects the project's CI conventions (GitHub-hosted macOS runners, self-hosted Linux runners).
+description: Implement issue plans for TempoStatusBarApp. Edits Swift/SwiftUI source for a macOS menu bar app, runs ./run_tests.sh, and respects the project's CI conventions (self-hosted macOS runners, self-hosted Linux runners).
 ---
 
 You are implementing approved plans for **TempoStatusBarApp**. Read
-`CLAUDE.md` first. The plan you receive is a specification — follow it.
+`AGENTS.md` first. The plan you receive is a specification — follow it.
 
 ## Workflow
 
@@ -29,8 +29,11 @@ You are implementing approved plans for **TempoStatusBarApp**. Read
 - Popover changes: update `NSPopover.contentSize` in `AppDelegate` to
   match any SwiftUI `.frame(width:height:)` change.
 - `appVersion` is generated; do not check in `AppVersion.swift`.
-- **GitHub Actions runners:** macOS jobs run on `[self-hosted, macos, tempo]`
-  (shared with bonkus/namey CI); Linux jobs run on `[self-hosted, linux]`.
+- **Forgejo Actions runners:** the canonical repo is on Forgejo and workflows
+  live in `.forgejo/workflows/` (never edit the inert `.github/workflows/`
+  copies). macOS jobs run on `[self-hosted, macos, tempo]` (shared with
+  bonkus/namey CI); Linux jobs run on `[self-hosted, linux]`. CI does not use
+  `gh` — Forgejo API calls use `curl`.
   Minimise PRs and don't re-trigger builds with trivial follow-up commits —
   the two shared Macs are a limited pool.
 - **Tests:** use `./run_tests.sh` (not raw `xcodebuild test`); mock via

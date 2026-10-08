@@ -1,9 +1,15 @@
 name: Linux Release
 
-# Triggers removed for the public snapshot — this workflow is intentionally disabled.
-# See the private source repository for the active version.
 on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'linux/**'
+      - 'flake.nix'
+      - 'flake.lock'
+      - '.forgejo/workflows/linux-release.yml'
   workflow_dispatch:
+
 permissions:
   contents: write
 
@@ -21,18 +27,25 @@ jobs:
     # The first pkgsStatic build compiles a musl stdenv closure from source.
     timeout-minutes: 90
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORGEJO_TOKEN: ${{ github.token }}
+      API_URL: ${{ github.api_url }}
+      REPO: ${{ github.repository }}
+    # Every run step executes inside the `ci` devShell (curl, jq); the runner
+    # baseline is nix/git/docker only. Steps that need the Rust toolchain or
+    # readelf still call `nix develop .#` themselves.
+    defaults:
+      run:
+        shell: nix --extra-experimental-features nix-command --extra-experimental-features flakes develop ${{ github.workspace }}#ci --command bash -euo pipefail {0}
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
     - name: Set up Nix
       uses: ./.github/actions/setup-nix
 
     - name: Resolve version and decide whether to release
       id: gate
-      shell: bash
       run: |
         set -euo pipefail
         # Evaluates the attribute only — does not build.
@@ -43,24 +56,24 @@ jobs:
         fi
         TAG="linux-v$VERSION"
         DIR="tempo-statusbar-$VERSION-x86_64-linux"
-        # `gh` comes from the repo's own devShell — the runner baseline has no
-        # gh (issue #218). Distinguish "tag absent" (HTTP 404) from a broken
-        # gh invocation, which the old `>/dev/null 2>&1` form treated as absent
-        # and so always reported release=true.
-        set +e
-        GH_OUT=$(nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#ci" --command \
-          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" 2>&1)
-        GH_RC=$?
-        set -e
-        if [ "$GH_RC" -eq 0 ]; then
-          echo "::notice::$TAG already exists — bump version in linux/Cargo.toml to publish"
-          echo "release=false" >> "$GITHUB_OUTPUT"
-        elif printf '%s' "$GH_OUT" | grep -q "Not Found"; then
-          echo "release=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "::error::gh api failed while checking for tag $TAG (exit $GH_RC): $GH_OUT"
-          exit 1
-        fi
+        # Distinguish "tag absent" (HTTP 404) from a broken API call, which must
+        # fail loudly rather than be read as "absent" and always release.
+        CODE=$(curl -sS -o /dev/null -w '%{http_code}' \
+          -H "Authorization: token $FORGEJO_TOKEN" \
+          "$API_URL/repos/$REPO/tags/$TAG")
+        case "$CODE" in
+          200)
+            echo "::notice::$TAG already exists — bump version in linux/Cargo.toml to publish"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            ;;
+          404)
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            ;;
+          *)
+            echo "::error::Forgejo API returned HTTP $CODE while checking for tag $TAG"
+            exit 1
+            ;;
+        esac
         {
           echo "version=$VERSION"
           echo "tag=$TAG"
@@ -73,7 +86,6 @@ jobs:
 
     - name: Verify the artifact
       if: steps.gate.outputs.release == 'true'
-      shell: bash
       run: |
         set -euo pipefail
         BIN=./result/bin/tempo-statusbar
@@ -94,7 +106,6 @@ jobs:
 
     - name: Stage the tarball
       if: steps.gate.outputs.release == 'true'
-      shell: bash
       run: |
         set -euo pipefail
         DIR="${{ steps.gate.outputs.dir }}"
@@ -110,7 +121,6 @@ jobs:
 
     - name: Write release notes
       if: steps.gate.outputs.release == 'true'
-      shell: bash
       run: |
         set -euo pipefail
         DIR="${{ steps.gate.outputs.dir }}"
@@ -173,17 +183,43 @@ jobs:
 
     - name: Create release
       if: steps.gate.outputs.release == 'true'
-      shell: bash
+      # Created as a draft, assets attached, then published, so `release:
+      # published` (fired on Forgejo for token-created releases, unlike GitHub)
+      # only happens once the assets exist; release-tag.yml's `linux-v` guard
+      # is what keeps it from starting a macOS build.
       run: |
-        set -euo pipefail
         DIR="${{ steps.gate.outputs.dir }}"
-        # `gh release create` creates the tag at --target; no separate tag step.
-        # Title equals tag deliberately — release-tag.yml enforces name == tag
-        # for the macOS line and the convention is worth keeping uniform.
-        nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#ci" --command \
-          gh release create "${{ steps.gate.outputs.tag }}" \
-          --repo "$GITHUB_REPOSITORY" \
-          --target "$GITHUB_SHA" \
-          --title "${{ steps.gate.outputs.tag }}" \
-          --notes-file release-notes.md \
-          "$DIR.tar.gz" "$DIR.tar.gz.sha256"
+        TAG="${{ steps.gate.outputs.tag }}"
+        # Creating the release creates the tag at target_commitish; no separate
+        # tag step. Name equals tag deliberately — release-tag.yml enforces
+        # name == tag for the macOS line and the convention is worth keeping
+        # uniform.
+        # A draft has no git tag, so the gate can't see one left behind by a
+        # cancelled or timed-out run; delete any such draft so this is idempotent.
+        STALE=$(curl -fsS -H "Authorization: token $FORGEJO_TOKEN" \
+          "$API_URL/repos/$REPO/releases?draft=true&limit=50" \
+          | jq -r --arg tag "$TAG" '.[] | select(.draft and .tag_name == $tag) | .id')
+        for ID in $STALE; do
+          curl -fsS -X DELETE -H "Authorization: token $FORGEJO_TOKEN" \
+            "$API_URL/repos/$REPO/releases/$ID" > /dev/null
+        done
+        PAYLOAD=$(jq -Rs --arg tag "$TAG" --arg sha "$GITHUB_SHA" \
+          '{tag_name: $tag, target_commitish: $sha, name: $tag, body: ., draft: true}' release-notes.md)
+        RELEASE_ID=$(curl -fsS -X POST \
+          -H "Authorization: token $FORGEJO_TOKEN" \
+          -H 'Content-Type: application/json' -d "$PAYLOAD" \
+          "$API_URL/repos/$REPO/releases" | jq -r '.id')
+        # Remove the draft on failure so the gate can retry on the next run.
+        trap 'curl -sS -X DELETE -H "Authorization: token $FORGEJO_TOKEN" "$API_URL/repos/$REPO/releases/$RELEASE_ID" > /dev/null || true' ERR
+        for FILE in "$DIR.tar.gz" "$DIR.tar.gz.sha256"; do
+          curl -fsS -X POST \
+            -H "Authorization: token $FORGEJO_TOKEN" \
+            -F "attachment=@$FILE" \
+            "$API_URL/repos/$REPO/releases/$RELEASE_ID/assets?name=$FILE" > /dev/null
+        done
+        curl -fsS -X PATCH \
+          -H "Authorization: token $FORGEJO_TOKEN" \
+          -H 'Content-Type: application/json' -d '{"draft": false}' \
+          "$API_URL/repos/$REPO/releases/$RELEASE_ID" > /dev/null
+        trap - ERR
+        echo "Published $TAG with $DIR.tar.gz and its .sha256"

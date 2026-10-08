@@ -1,17 +1,19 @@
-# GitHub-only copy, kept solely so the final GitHub PR of the Forgejo
-# migration (#clw_01M45RN20AQVB7Y7X1MTQRB3DA) passes its required checks.
-# Forgejo ignores .github/workflows/ once .forgejo/workflows/ exists, so this
-# never runs there; the canonical workflow is .forgejo/workflows/pr-verification.yml. The
-# GitHub repo is archived after the migration.
-
 name: PR Verification
 
-# Triggers removed for the public snapshot — this workflow is intentionally disabled.
-# See the private source repository for the active version.
 on:
-  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
+    # paths-ignore only skips when *every* changed file matches, so a mixed
+    # Swift + Rust PR still runs the macOS jobs.
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      # The Linux tray app is built by linux-ci.yml; keep it off the shared Macs.
+      - 'linux/**'
+      - 'flake.nix'
+      - 'flake.lock'
+
 permissions:
-  security-events: write
   contents: read
 
 concurrency:
@@ -24,30 +26,35 @@ jobs:
     runs-on: [self-hosted, macos, tempo]
     # Only two Macs serve three repos — a wedged job must not hold one for hours.
     timeout-minutes: 60
+    # Forgejo mints an OIDC ID token only when this is set on the job (or
+    # workflow); without it configure-aws-credentials finds no token. The
+    # issuer is https://www.bstjohn.net/forgejo-oidc (see s3-bootstrap.yml).
+    enable-openid-connect: true
     # contents dropped to read when DMG publishing moved from per-PR
     # pre-releases to S3 (#177); id-token: write is required for OIDC.
+    # issues: write as well as pull-requests: write because Forgejo's PR
+    # comment endpoint is /issues/{index}/comments.
     permissions:
       contents: read
       pull-requests: write
+      issues: write
       id-token: write
     env:
       S3_BUCKET: tempo-statusbar-releases
       S3_REGION: us-east-1
       DOWNLOAD_BASE: https://tempo-statusbar-releases.s3.us-east-1.amazonaws.com
-      # 'true' when Dependabot triggered this run. Dependabot-triggered
-      # workflows read the Dependabot secrets store, not the repo's Actions
-      # secrets, so the signing cert and AWS role are unavailable (#180).
-      # Build/test/archive/DMG still run — Release builds ad-hoc sign in
-      # place of the Developer ID identity — while cert import, the
-      # Developer ID authority check, DMG signing/notarization, and the S3
-      # upload/PR comment are skipped.
-      IS_DEPENDABOT: ${{ github.actor == 'dependabot[bot]' }}
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
         fetch-depth: 0
+
+    - name: Expose Homebrew
+      # The Forgejo host runner's PATH omits Homebrew, so `aws` (and in
+      # code-quality, `swiftlint`) would not be found without this.
+      run: |
+        for d in /opt/homebrew/bin /usr/local/bin; do if [ -d "$d" ]; then echo "$d" >> "$GITHUB_PATH"; fi; done
 
     - name: Prevent idle sleep
       # macOS idle sleep tracks user input, not CPU load, so a busy job can't
@@ -92,13 +99,10 @@ jobs:
         git fetch --tags
         LATEST_TAG=$(git tag -l | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
         if [ -z "$LATEST_TAG" ]; then LATEST_TAG="0.0.0"; fi
-        VERSION="${LATEST_TAG}-pr-${{ github.event.number }}-$(git rev-parse --short HEAD)"
+        VERSION="${LATEST_TAG}-pr-${{ github.event.pull_request.number }}-$(git rev-parse --short HEAD)"
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
     - name: Import signing certificate
-      # No repo secrets on Dependabot runs (see IS_DEPENDABOT above) — the
-      # empty cert would fail to import.
-      if: env.IS_DEPENDABOT != 'true'
       env:
         SIGNING_CERT_P12_BASE64: ${{ secrets.SIGNING_CERT_P12_BASE64 }}
         SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
@@ -194,19 +198,12 @@ jobs:
       env:
         DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
       run: |
-        # Dependabot runs have no Developer ID cert — ad-hoc sign instead
-        # (the Debug config already ad-hoc signs via CODE_SIGN_IDENTITY=-).
-        SIGNING=()
-        if [ "$IS_DEPENDABOT" = "true" ]; then
-          SIGNING=("CODE_SIGN_IDENTITY=-")
-        fi
         xcodebuild -project TempoStatusBarApp.xcodeproj \
           -scheme TempoStatusBarApp \
           -configuration Release \
           -destination 'platform=macOS' \
           DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
           MARKETING_VERSION="${{ steps.version.outputs.version }}" \
-          "${SIGNING[@]}" \
           build
 
     - name: Run unit tests
@@ -226,7 +223,7 @@ jobs:
         echo "✅ Unit tests completed successfully"
 
     - name: Upload test results
-      uses: actions/upload-artifact@v7
+      uses: https://code.forgejo.org/forgejo/upload-artifact@v4
       if: always()
       # Best-effort: org Actions storage quota exhaustion must not fail the
       # build (#177 — observed as "Artifact storage quota has been hit").
@@ -254,19 +251,13 @@ jobs:
         DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
       run: |
         echo "Running integration tests..."
-        # Check if the app can be built and archived. Dependabot runs have no
-        # Developer ID cert — ad-hoc sign instead.
-        SIGNING=()
-        if [ "$IS_DEPENDABOT" = "true" ]; then
-          SIGNING=("CODE_SIGN_IDENTITY=-")
-        fi
+        # Check if the app can be built and archived.
         xcodebuild -project TempoStatusBarApp.xcodeproj \
           -scheme TempoStatusBarApp \
           -configuration Release \
           -destination 'platform=macOS' \
           DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
           MARKETING_VERSION="${{ steps.version.outputs.version }}" \
-          "${SIGNING[@]}" \
           archive \
           -archivePath ./build/TempoStatusBarApp.xcarchive
           
@@ -295,13 +286,9 @@ jobs:
         echo "=== codesign --verify --deep --strict ==="
         codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
-        if [ "$IS_DEPENDABOT" = "true" ]; then
-          echo "=== Dependabot run: ad-hoc signed, skipping Developer ID authority check ==="
-        else
-          echo "=== Identity must be a Developer ID Application cert ==="
-          codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=Developer ID Application:' \
-            || { echo "❌ Expected Authority=Developer ID Application: not found"; exit 1; }
-        fi
+        echo "=== Identity must be a Developer ID Application cert ==="
+        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=Developer ID Application:' \
+          || { echo "❌ Expected Authority=Developer ID Application: not found"; exit 1; }
 
         echo "=== Hardened Runtime must be enabled ==="
         codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'flags=.*runtime' \
@@ -324,9 +311,8 @@ jobs:
         echo "Created $DMG_NAME"
 
     - name: Sign DMG
-      # Same-repo guard for fork PRs; Dependabot branches are same-repo but
-      # have no signing secrets (see IS_DEPENDABOT above).
-      if: github.event.pull_request.head.repo.full_name == github.repository && env.IS_DEPENDABOT != 'true'
+      # Same-repo guard: Forgejo fork PRs get no secrets or OIDC token.
+      if: github.event.pull_request.head.repo.full_name == github.repository
       run: |
         DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
 
@@ -346,7 +332,7 @@ jobs:
         codesign --verify --verbose=2 "$DMG"
 
     - name: Notarize DMG
-      if: github.event.pull_request.head.repo.full_name == github.repository && env.IS_DEPENDABOT != 'true'
+      if: github.event.pull_request.head.repo.full_name == github.repository
       env:
         AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
         AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
@@ -370,7 +356,7 @@ jobs:
         rm "$KEY_PATH"
 
     - name: Staple notarization ticket
-      if: github.event.pull_request.head.repo.full_name == github.repository && env.IS_DEPENDABOT != 'true'
+      if: github.event.pull_request.head.repo.full_name == github.repository
       run: |
         DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
         xcrun stapler staple "$DMG"
@@ -380,7 +366,7 @@ jobs:
         spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
 
     - name: Ensure AWS CLI
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && env.IS_DEPENDABOT != 'true'
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
       run: |
         # Self-hosted runners keep the CLI installed between runs; a bare
         # `brew install` would try to upgrade an existing copy (see the
@@ -389,74 +375,82 @@ jobs:
 
     - name: Configure AWS credentials
       # Fork PRs have no OIDC access to the role — same guard as sign/notarize.
-      # Dependabot runs get a read-only token (no id-token) and no AWS_ROLE_ARN.
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && env.IS_DEPENDABOT != 'true'
-      uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd  # v6.3.0
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      uses: https://github.com/aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd  # v6.3.0
       with:
         role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
         aws-region: ${{ env.S3_REGION }}
 
     - name: Upload DMG to S3
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && env.IS_DEPENDABOT != 'true'
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
       run: |
         set -euo pipefail
         DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
-        aws s3 cp "$DMG" "s3://$S3_BUCKET/pr/${{ github.event.number }}/$DMG" \
+        aws s3 cp "$DMG" "s3://$S3_BUCKET/pr/${{ github.event.pull_request.number }}/$DMG" \
           --content-type application/x-apple-diskimage
 
     - name: Comment PR with build artifact link
-      # Also skipped for Dependabot: nothing was uploaded, and the read-only
-      # Dependabot token can't comment anyway.
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && env.IS_DEPENDABOT != 'true'
+      # Mac jobs don't use the flake (it targets Linux only), so there is no
+      # jq here; the Xcode CLT python3 does the JSON and HTTP. Matches on the
+      # marker rather than the author, because Forgejo's API user object has
+      # no `type: "Bot"` field.
+      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
       continue-on-error: true
-      uses: actions/github-script@v9
-      with:
-        script: |
-          const version = `${{ steps.version.outputs.version }}`;
-          const dmgName = `TempoStatusBarApp-${version}.dmg`;
-          const downloadUrl = `${{ env.DOWNLOAD_BASE }}/pr/${{ github.event.number }}/${dmgName}`;
-          const marker = '<!-- pr-build-comment -->';
+      env:
+        FORGEJO_TOKEN: ${{ github.token }}
+        API_URL: ${{ github.api_url }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        /usr/bin/python3 - <<'PY'
+        import json, os, urllib.request
 
-          const body = [
+        api, repo, pr = os.environ["API_URL"], os.environ["REPO"], os.environ["PR"]
+        version = os.environ["VERSION"]
+        dmg_name = f"TempoStatusBarApp-{version}.dmg"
+        download_url = f"{os.environ['DOWNLOAD_BASE']}/pr/{pr}/{dmg_name}"
+        marker = "<!-- pr-build-comment -->"
+
+        body = "\n".join([
             marker,
-            '## PR Build Available',
-            '',
-            'A signed and notarized macOS DMG for this PR is hosted on S3.',
-            '',
-            '| | |',
-            '|---|---|',
-            `| **Version** | \`${version}\` |`,
-            `| **Download** | [${dmgName}](${downloadUrl}) |`,
-            '',
-            '**To install:**',
-            '1. Click the download link above (the `.dmg` is served raw — not wrapped in a zip)',
-            '2. Open the `.dmg`, drag **TempoStatusBarApp** to Applications',
-            '',
-            '> A new build is uploaded on every push; all builds for this PR are deleted from S3 when the PR closes.',
-          ].join('\n');
+            "## PR Build Available",
+            "",
+            "A signed and notarized macOS DMG for this PR is hosted on S3.",
+            "",
+            "| | |",
+            "|---|---|",
+            f"| **Version** | `{version}` |",
+            f"| **Download** | [{dmg_name}]({download_url}) |",
+            "",
+            "**To install:**",
+            "1. Click the download link above (the `.dmg` is served raw — not wrapped in a zip)",
+            "2. Open the `.dmg`, drag **TempoStatusBarApp** to Applications",
+            "",
+            "> A new build is uploaded on every push; all builds for this PR are deleted from S3 when the PR closes.",
+        ])
 
-          const allComments = await github.paginate(github.rest.issues.listComments, {
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number,
-          });
-          const existing = allComments.find(c => c.body.includes(marker));
+        def call(method, path, payload=None):
+            data = json.dumps(payload).encode() if payload is not None else None
+            req = urllib.request.Request(f"{api}{path}", data=data, method=method)
+            req.add_header("Authorization", f"token {os.environ['FORGEJO_TOKEN']}")
+            req.add_header("Content-Type", "application/json")
+            with urllib.request.urlopen(req) as resp:
+                return json.load(resp)
 
-          if (existing) {
-            await github.rest.issues.updateComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: existing.id,
-              body,
-            });
-          } else {
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body,
-            });
-          }
+        existing = None
+        page = 1
+        while existing is None:
+            comments = call("GET", f"/repos/{repo}/issues/{pr}/comments?page={page}&limit=50")
+            if not comments:
+                break
+            existing = next((c for c in comments if marker in (c.get("body") or "")), None)
+            page += 1
+        if existing:
+            call("PATCH", f"/repos/{repo}/issues/comments/{existing['id']}", {"body": body})
+        else:
+            call("POST", f"/repos/{repo}/issues/{pr}/comments", {"body": body})
+        PY
 
     - name: Clean up signing keychain
       if: always()
@@ -504,7 +498,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
     - name: Prevent idle sleep
       # macOS idle sleep tracks user input, not CPU load, so a busy job can't
@@ -543,6 +537,11 @@ jobs:
         echo "DEVELOPER_DIR=$newest/Contents/Developer" >> "$GITHUB_ENV"
         DEVELOPER_DIR="$newest/Contents/Developer" xcodebuild -version
 
+    - name: Expose Homebrew
+      # The Forgejo host runner's PATH omits Homebrew; swiftlint lives there.
+      run: |
+        for d in /opt/homebrew/bin /usr/local/bin; do if [ -d "$d" ]; then echo "$d" >> "$GITHUB_PATH"; fi; done
+
     - name: Install SwiftLint
       run: |
         # Self-hosted runners keep SwiftLint installed between runs; only install
@@ -565,20 +564,19 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
     - name: Set up Nix
       uses: ./.github/actions/setup-nix
 
     - name: Run Trivy vulnerability scanner
+      # No code-scanning upload on Forgejo: HIGH+CRITICAL findings are printed
+      # as a table for the log, and only CRITICAL findings with a fix
+      # available fail the job. If this goes red, fix the dependency rather
+      # than loosening the gate.
       run: |
-        nix --extra-experimental-features nix-command --extra-experimental-features flakes \
-          develop "$GITHUB_WORKSPACE#security" --command \
-          trivy fs --format sarif --output trivy-results.sarif .
-
-    - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v4
-      if: always() && github.event_name == 'pull_request'
-      with:
-        sarif_file: 'trivy-results.sarif'
-      continue-on-error: true
+        NIX_FLAGS="--extra-experimental-features nix-command --extra-experimental-features flakes"
+        nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#security" --command \
+          trivy fs --scanners vuln --severity HIGH,CRITICAL --format table .
+        nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#security" --command \
+          trivy fs --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 .

@@ -1,11 +1,17 @@
 name: Main Verification
 
-# Triggers removed for the public snapshot — this workflow is intentionally disabled.
-# See the private source repository for the active version.
 on:
+  push:
+    branches: [ main ]
+    # The Linux tray app is built by linux-ci.yml; keep it off the shared Macs.
+    # paths-ignore only skips when *every* changed file matches.
+    paths-ignore:
+      - 'linux/**'
+      - 'flake.nix'
+      - 'flake.lock'
   workflow_dispatch:
+
 permissions:
-  security-events: write
   contents: read
 
 concurrency:
@@ -21,7 +27,7 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
     - name: Prevent idle sleep
       # macOS idle sleep tracks user input, not CPU load, so a busy job can't
@@ -77,7 +83,7 @@ jobs:
         echo "$SIGNING_CERT_P12_BASE64" | base64 --decode -o "$CERT_PATH"
 
         security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security set-keychain-settings "$KEYCHAIN_PATH"
         security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
         # Import the signing identity (cert + private key). Omit -t so pkcs12
@@ -107,25 +113,24 @@ jobs:
 
         security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
 
-        # Make the temp keychain the ONLY user keychain in the search list for
-        # the duration of the job (restored in the always() cleanup step). Two
-        # reasons, both from the shared self-hosted Macs being real machines
-        # with real login keychains:
-        #   1. The unit tests exercise the real Keychain under the production
-        #      service name — with the login keychain searchable they collide
-        #      with (and could delete) genuine stored credentials, and hang on
-        #      headless authorization prompts.
-        #   2. codesign builds its chain across every searchable keychain; a
-        #      duplicate/differently-trusted copy of the Developer ID certs in
-        #      the login keychain can poison chain building ("unable to build
-        #      chain to self-signed root").
-        security list-keychains -d user -s "$KEYCHAIN_PATH"
-
-        # Also make it the default keychain: on the self-hosted Macs the runner
-        # user has no GUI session, and codesign fails with errSecInternalComponent
-        # when the signing keychain is only in the search list. Restored to the
-        # login keychain in the always() cleanup step.
-        security default-keychain -d user -s "$KEYCHAIN_PATH"
+        # Prepend the temp keychain to the user's search list so Xcode/codesign
+        # can find the identity. The login keychain stays searchable and stays
+        # the default so GUI-session processes (e.g. assistantd) are
+        # unaffected — this runner runs as the logged-in GUI user, and
+        # replacing the search list/default previously made background daemons
+        # in that session pick up the temp keychain and prompt for its
+        # password (#234).
+        EXISTING_KEYCHAINS=()
+        while IFS= read -r entry; do
+          [ -z "$entry" ] && continue
+          # An orphaned entry from an earlier run that never cleaned up.
+          [ "$(basename "$entry")" = "build.keychain-db" ] && continue
+          EXISTING_KEYCHAINS+=("$entry")
+        done < <(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')
+        if [ "${#EXISTING_KEYCHAINS[@]}" -eq 0 ]; then
+          EXISTING_KEYCHAINS=("login.keychain-db")
+        fi
+        security list-keychains -d user -s "$KEYCHAIN_PATH" "${EXISTING_KEYCHAINS[@]}"
 
         rm "$CERT_PATH"
 
@@ -161,7 +166,7 @@ jobs:
         echo "✅ Unit tests completed successfully"
 
     - name: Upload test results
-      uses: actions/upload-artifact@v7
+      uses: https://code.forgejo.org/forgejo/upload-artifact@v4
       if: always()
       # Best-effort: org Actions storage quota exhaustion must not fail the
       # build (#177 — observed as "Artifact storage quota has been hit").
@@ -237,8 +242,27 @@ jobs:
       if: always()
       run: |
         KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
-        security list-keychains -d user -s login.keychain-db 2>/dev/null || true
-        security default-keychain -d user -s login.keychain-db 2>/dev/null || true
+
+        # Rebuild the search list without any build.keychain-db entries (ours,
+        # or an orphan left by a run that didn't get this far).
+        REMAINING_KEYCHAINS=()
+        while IFS= read -r entry; do
+          [ -z "$entry" ] && continue
+          [ "$(basename "$entry")" = "build.keychain-db" ] && continue
+          REMAINING_KEYCHAINS+=("$entry")
+        done < <(security list-keychains -d user 2>/dev/null | sed -e 's/^[[:space:]]*"//' -e 's/"$//')
+        if [ "${#REMAINING_KEYCHAINS[@]}" -eq 0 ]; then
+          REMAINING_KEYCHAINS=("login.keychain-db")
+        fi
+        security list-keychains -d user -s "${REMAINING_KEYCHAINS[@]}" 2>/dev/null || true
+
+        # Only self-heal the default keychain if it was left pointing at a
+        # build keychain (left over from a run that predates #234); never
+        # touch it otherwise, since we no longer change it ourselves.
+        if security default-keychain -d user 2>/dev/null | grep -q 'build.keychain-db'; then
+          security default-keychain -d user -s login.keychain-db 2>/dev/null || true
+        fi
+
         security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
 
     - name: Release idle-sleep assertion
@@ -252,23 +276,22 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
-      
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        scan-type: 'fs'
-        scan-ref: '.'
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-        cache: 'false'
+      uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-    - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v4
-      if: always()
-      with:
-        sarif_file: 'trivy-results.sarif'
-      continue-on-error: true
+    - name: Set up Nix
+      uses: ./.github/actions/setup-nix
+
+    - name: Run Trivy vulnerability scanner
+      # No code-scanning upload on Forgejo: HIGH+CRITICAL findings are printed
+      # as a table for the log, and only CRITICAL findings with a fix
+      # available fail the job. If this goes red, fix the dependency rather
+      # than loosening the gate.
+      run: |
+        NIX_FLAGS="--extra-experimental-features nix-command --extra-experimental-features flakes"
+        nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#security" --command \
+          trivy fs --scanners vuln --severity HIGH,CRITICAL --format table .
+        nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#security" --command \
+          trivy fs --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 .
 
   documentation-check:
     name: Documentation Check
@@ -276,7 +299,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         
     - name: Check for documentation
       run: |

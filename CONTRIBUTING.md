@@ -73,34 +73,35 @@ Thank you for your interest in contributing to TempoStatusBarApp! This document 
 - Documentation must be updated if needed
 - Security considerations must be addressed
 
-## GitHub Actions
+## Forgejo Actions
 
-The project uses several GitHub Actions workflows:
+The canonical repo is on Forgejo (`git.home.bstjohn.net/St-John-Software/TempoStatusBar`), and CI runs as Forgejo Actions workflows in `.forgejo/workflows/`. CI does not use `gh`; it talks to the Forgejo API with `curl`. See [docs/ci-cd.md](docs/ci-cd.md) for full details.
 
 ### PR Verification
 - Runs on every PR to the main branch
 - Verifies build and code quality
 - Includes SwiftLint checks
-- Performs security scanning with Trivy
-- Builds and code-signs a DMG, then publishes it to a per-PR GitHub pre-release tagged `pr-<NUMBER>`. The DMG is delivered as a raw `.dmg` (not zipped), which keeps its `com.apple.quarantine` origin consistent with tagged-release downloads and avoids macOS Keychain re-prompts.
+- Performs security scanning with Trivy (fails only on CRITICAL findings with a fix available)
+- Builds, signs and notarizes a DMG and uploads it to S3. The DMG is delivered as a raw `.dmg` (not zipped), which keeps its `com.apple.quarantine` origin consistent with tagged-release downloads and avoids macOS Keychain re-prompts.
 - **Automatically posts a comment** on the PR with a direct download link to the DMG. The comment is updated on each subsequent push, so there is always a single comment pointing to the latest build.
-- The pre-release is automatically deleted when the PR closes (merged or not).
-- Fork PRs skip the publish/comment steps because their workflow token is read-only; contributors from forks should rebase their branch onto the upstream repo or build locally to test.
+- The PR's builds are deleted from S3 when the PR closes (merged or not).
+- Fork PRs skip the sign/upload/comment steps because they get no secrets; contributors from forks should rebase their branch onto the upstream repo or build locally to test.
 
 ### Release Verification
-- Runs on pushes to main branch and manual dispatch
-- Builds release artifacts
+- Runs when a release is published on Forgejo, and on manual dispatch
+- Builds, signs and notarizes the release DMG
 - Security scanning with Trivy
 - Documentation validation
-- Builds a DMG to verify packaging; on a tagged release event, attaches it to the GitHub Release page (no Actions artifact upload)
+- Uploads the DMG to S3 and adds the download link to the release notes (the DMG is not a release asset)
 
 ## Release Process
 
-1. **Create a release** on GitHub
+1. **Create a release** on Forgejo with the title equal to the tag (e.g. `v1.3.0`)
 2. **Add release notes** describing changes
-3. **Tag the release** with semantic versioning
+3. **Publish** — CI builds the DMG and appends its download link to the release notes
 4. **Wait for CI** to complete
-5. **Download artifacts** from the release
+
+Linux releases are cut automatically by bumping `version` in `linux/Cargo.toml`; the tarball and `.sha256` are attached to a `linux-vX.Y.Z` Forgejo release. Claws mirrors the latest release (both lines) to the public GitHub repo.
 
 ## Getting Help
 

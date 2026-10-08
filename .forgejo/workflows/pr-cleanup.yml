@@ -1,0 +1,48 @@
+name: PR Cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: pr-cleanup-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  delete-pr-builds:
+    name: Delete PR Builds from S3
+    # Fork PRs never uploaded (no OIDC access), so nothing to clean up.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 15
+    # Forgejo mints an OIDC ID token only when this is set on the job.
+    enable-openid-connect: true
+    env:
+      S3_BUCKET: tempo-statusbar-releases
+      S3_REGION: us-east-1
+    # `aws` comes from the repo's `ci` devShell — the runner baseline is
+    # nix/git/docker only.
+    defaults:
+      run:
+        shell: nix --extra-experimental-features nix-command --extra-experimental-features flakes develop ${{ github.workspace }}#ci --command bash -euo pipefail {0}
+    steps:
+      - name: Checkout code
+        uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Nix
+        uses: ./.github/actions/setup-nix
+
+      - name: Configure AWS credentials
+        uses: https://github.com/aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd  # v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.S3_REGION }}
+
+      - name: Delete PR builds from S3
+        run: |
+          aws s3 rm "s3://$S3_BUCKET/pr/${{ github.event.pull_request.number }}/" --recursive || true
+          echo "Cleanup complete (prefix may not have existed; that is OK)."

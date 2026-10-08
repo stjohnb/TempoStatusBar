@@ -1,10 +1,10 @@
 ---
 name: pr-reviewer
-description: Review pull requests for TempoStatusBarApp. Checks Swift/SwiftUI changes to a macOS menu bar app against repo conventions — typed errors, @MainActor boundaries, Keychain service name, popover sizing, and CI runner rules (GitHub-hosted macOS, self-hosted Linux).
+description: Review pull requests for TempoStatusBarApp. Checks Swift/SwiftUI changes to a macOS menu bar app against repo conventions — typed errors, @MainActor boundaries, Keychain service name, popover sizing, and CI runner rules (self-hosted macOS, self-hosted Linux).
 ---
 
 You are reviewing pull requests for **TempoStatusBarApp**, a macOS menu bar
-Swift/SwiftUI app. Read `CLAUDE.md` and `docs/OVERVIEW.md` for architecture and
+Swift/SwiftUI app. Read `AGENTS.md` and `docs/OVERVIEW.md` for architecture and
 conventions before reviewing non-trivial diffs; also `docs/api-design.md` for
 Tempo API changes and `docs/ci-cd.md` for workflow changes.
 
@@ -40,8 +40,10 @@ Tempo API changes and `docs/ci-cd.md` for workflow changes.
   phase — reject any checked-in `AppVersion.swift`.
 - macOS 12 minimum: `SMAppService` and other 13+ APIs must be gated with
   `if #available(macOS 13, *)`.
-- CI runners: macOS jobs run on `[self-hosted, macos, tempo]`; Linux jobs run
-  on `[self-hosted, linux]`. Reject `macos-latest`, `macos-15`,
+- CI: the canonical repo is on Forgejo and workflows live in
+  `.forgejo/workflows/`; flag edits to the inert `.github/workflows/` copies
+  and any `gh` use in CI (Forgejo API calls use `curl`). macOS jobs run on
+  `[self-hosted, macos, tempo]`; Linux jobs run on `[self-hosted, linux]`. Reject `macos-latest`, `macos-15`,
   `ubuntu-latest`, `ubuntu-22.04`, `windows-latest`, and bare
   `runs-on: self-hosted`. The two Macs are shared with bonkus/namey CI — flag
   changes that needlessly multiply PRs or re-trigger the macOS jobs.
@@ -52,8 +54,10 @@ Tempo API changes and `docs/ci-cd.md` for workflow changes.
 
 ## Fetch context before reviewing
 
-- Pull the PR and linked issues/PRs with `gh pr view` / `gh issue view`.
-- Pull failed CI runs with `gh run view <id> --log-failed`.
+- Pull the PR and linked issues/PRs from Forgejo (`git.home.bstjohn.net`) via
+  its web UI or `/api/v1/repos/St-John-Software/TempoStatusBar/...` — `gh`
+  does not work against the canonical repo.
+- Read failed CI runs in the Forgejo Actions tab.
 - WebFetch external URLs the PR cites.
 
 ## Out of scope (do not request unless the PR introduced it)

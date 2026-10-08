@@ -2,12 +2,12 @@
 
 | Doc | Read this when | Depth |
 |---|---|---|
+| [PRODUCT.md](PRODUCT.md) | Checking what the product must do and why, before planning any change | Entry point |
 | [OVERVIEW.md](OVERVIEW.md) | Starting any task in this repo | Entry point |
 | [api-design.md](api-design.md) | Working on Tempo/Jira API calls, endpoints, auth, or user-identifier resolution | Reference |
-| [ci-cd.md](ci-cd.md) | Changing a GitHub Actions workflow, code signing/notarization, or release/S3 automation | Reference |
+| [ci-cd.md](ci-cd.md) | Changing a Forgejo Actions workflow, code signing/notarization, or release/S3 automation | Reference |
 | [linux.md](linux.md) | Working on the Linux tray crate (`linux/`) — architecture, config/credential resolution, releases | Reference |
 | [DESIGN.md](DESIGN.md) | Touching the Linux GTK4 windows' visual design (colour, type, motion) | Deep dive |
-| [requirements.md](requirements.md) | Checking a cross-cutting owner constraint not tied to one subsystem | Reference |
 | [agent-notes.md](agent-notes.md) | Debugging a host/CI/Claws operational gotcha | Reference |
 | [claws-automation.md](claws-automation.md) | Understanding how Claws automates issues, PRs, and labels in this repo | Reference |
 
@@ -31,8 +31,9 @@ LaunchAtLoginManager.swift     SMAppService login-item wrapper (macOS 13+)
 TempoStatusBarAppTests/        XCTest unit tests (mocked)
 linux/                         Linux tray app (Rust) — see "Linux App" below
 flake.nix                      Nix dev shell + package for the Linux app
-.github/actions/               Composite actions (setup-nix)
-.github/workflows/             CI/CD (PR, main, release, Linux)
+.forgejo/workflows/            CI/CD (PR, main, release, Linux) — Forgejo Actions
+.github/actions/               Composite actions (setup-nix), used by .forgejo/workflows/
+.github/workflows/             Inert GitHub-only copies kept for the migration — never edit
 README.md                      Private-repo README (setup/config instructions)
 README.public.md               Source for the public repo's README — see "Public Snapshot" below
 ```
@@ -230,7 +231,7 @@ The `lastErrorWasNetworkError` flag is set `true` only on `.networkError` and cl
 
 The automatic path passes `respectSkippedVersion: true` so the alert is suppressed if the user previously clicked "Skip This Version". The manual path always shows a result.
 
-`UpdateChecker.shared` performs the actual API call to `https://api.github.com/repos/stjohnb/TempoStatusBar/releases/latest` — a **public** repo, distinct from the private `St-John-Software/TempoStatusBar` source repo this codebase lives in. Requests include `User-Agent: TempoStatusBar/<version>` — the GitHub API rejects requests that omit this header. `parseSemver` strips leading `v`/`V`, splits on `.`, and pads shorter arrays with zeros for comparison — correctly handling `1.2.10 > 1.2.9` where string comparison would fail. "Skip This Version" persists the version string in `UserDefaults` under `TempoStatusBar.UpdateChecker.skippedVersion`. No Sparkle dependency — users click through to `release.html_url` to download.
+`UpdateChecker.shared` performs the actual API call to `https://api.github.com/repos/stjohnb/TempoStatusBar/releases/latest` — a **public** GitHub repo, distinct from the private source repo this codebase lives in (canonical on Forgejo at `git.home.bstjohn.net/St-John-Software/TempoStatusBar`). The public mirror stays on GitHub, so `UpdateChecker` is unaffected by the Forgejo migration. Requests include `User-Agent: TempoStatusBar/<version>` — the GitHub API rejects requests that omit this header. `parseSemver` strips leading `v`/`V`, splits on `.`, and pads shorter arrays with zeros for comparison — correctly handling `1.2.10 > 1.2.9` where string comparison would fail. "Skip This Version" persists the version string in `UserDefaults` under `TempoStatusBar.UpdateChecker.skippedVersion`. No Sparkle dependency — users click through to `release.html_url` to download.
 
 **Testability:** `UpdateChecker` exposes two injectable properties for unit tests:
 - `session: URLSession` — replaced with an ephemeral session backed by `MockURLProtocol` to intercept network requests without hitting the real GitHub API
@@ -240,10 +241,10 @@ The automatic path passes `respectSkippedVersion: true` so the alert is suppress
 
 ### Public Snapshot
 
-Development happens in this private repo; a public mirror at `stjohnb/TempoStatusBar` is what `UpdateChecker` and end users see. Two independent mechanisms populate it, both external to this repo's own CI:
+Development happens in this private repo, whose canonical home is Forgejo (`git.home.bstjohn.net/St-John-Software/TempoStatusBar`); the old GitHub copy is archived. A public mirror on GitHub at `stjohnb/TempoStatusBar` is what `UpdateChecker` and end users see — it stays on GitHub, so `UpdateChecker.swift` did not change in the migration. Two independent mechanisms populate it, both run by Claws' `public-snapshot-sync` reading the Forgejo source, both external to this repo's own CI:
 
 - **Source snapshot** — a Claws sync routine periodically publishes a squashed, history-free snapshot of this repo to the public one. `README.public.md` (repo root) is the source for that snapshot's `README.md` — the filename never appears in the published output, so its content must never self-reference `README.public.md`, mention syncing/snapshotting, or reference this private source repo, credentials, self-hosted CI, or signing/release internals. `README.md` (this repo's own root README) is separate and is **not** published as-is.
-- **Release mirroring** — when a new stable release (not RC/pre-release) is published here, a separate Claws routine fetches the notarized DMG and creates/updates the matching release on the public repo (most-recent-only, no historical backfill). This is what `UpdateChecker` polls via the public repo's `/releases/latest`. Nothing in `.github/workflows/release-tag.yml` performs this mirroring — it happens entirely outside this repo's CI, using credentials the sync routine already holds. **Since #177 the DMG is no longer attached to this repo's GitHub Release as an asset** — `release-tag.yml` publishes it to S3 (`https://tempo-statusbar-releases.s3.us-east-1.amazonaws.com/releases/TempoStatusBarApp-<version>.dmg`) and writes that link into the release body. The external mirror routine must download the DMG from the S3 URL (or the release-body link), not from a release asset — coordinating that change in the routine is outside this repo (tracked as St-John-Software/claws#2115; until it lands, a stable release fires a "Release mirror failed" alert in Claws).
+- **Release mirroring** — when a new stable release (not RC/pre-release) is published here, Claws reads it through the Forgejo releases API and creates/updates the matching release on the public GitHub repo (most-recent-only, no historical backfill). This is what `UpdateChecker` polls via the public repo's `/releases/latest`. Nothing in `.forgejo/workflows/release-tag.yml` performs this mirroring — it happens entirely outside this repo's CI, using credentials the sync routine already holds. The macOS DMG is **not** a release asset (#177): `release-tag.yml` publishes it to S3 (`https://tempo-statusbar-releases.s3.us-east-1.amazonaws.com/releases/TempoStatusBarApp-<version>.dmg`) and writes that link into the Forgejo release body, and Claws falls back to that S3 URL for `v*` tags. The Linux tarball and its `.sha256` **are** Forgejo release assets on `linux-v*` releases, and Claws copies them across as-is.
 
 ## API Integration
 
@@ -271,16 +272,6 @@ A migration path exists for users upgrading from versions that stored credential
 Fields stored: `apiToken`, `accountId` (username), `jiraURL`, `warningThreshold`. (A `githubToken` field existed prior to #161 for authenticated update checks against the private repo; it was removed once `UpdateChecker` was repointed at a public repo. Old Keychain blobs containing a `githubToken` key still decode cleanly since `Credentials` uses synthesized `Decodable`, which ignores unknown JSON keys.)
 
 Saving or deleting credentials posts `.credentialsChanged` to `NotificationCenter`.
-
-**Constraint — no credential-storage change without a migration path:** a PR
-adding a UI warning about insecure credential storage was closed without
-merging (#31) after the owner asked whether it was a breaking change and
-whether existing installations would lose access to already-stored
-credentials on upgrade. Any future change to credential storage — including
-UI/messaging-only changes — must not risk breaking existing users' access to
-credentials they already have stored, and should spell out the migration
-path (as the UserDefaults→Keychain and #94/#98 service-rename migrations
-above do) rather than assume a clean upgrade.
 
 ## Version String Generation
 
@@ -334,32 +325,29 @@ There are no hardcoded API hosts beyond the relative Jira and Tempo paths. See [
 
 Issue triage, PR labelling, and related repository maintenance are handled by the Claws automation service. See [claws-automation.md](claws-automation.md) for details on how Claws manages this repo.
 
-## Requirements
-
-Standing, cross-cutting constraints from the repo owner that aren't tied to one subsystem doc (e.g. GitHub repo settings, secret-handling policy) live in [requirements.md](requirements.md). Subsystem-specific constraints and their rationale live inline in the relevant doc (this file, [api-design.md](api-design.md), [ci-cd.md](ci-cd.md)) rather than in a separate log.
+This repo's own Claws settings — job disables (`disabledJobs`) and runner enrollment (`runners`) — live in `claws.json` at the repo root, not on the automation host's config, so reconfiguring them is a PR here rather than a host edit (#227). Claws unions this file with the host config and ignores unknown keys, so adding a new key here ahead of Claws support for it is safe. A `claws.json` missing entirely from the default branch (not merely `enabled: false`) unmonitors the repo; never delete the file.
 
 ## CI/CD
 
-Eight GitHub Actions workflows — see [ci-cd.md](ci-cd.md) for full details. DMGs are stored in S3 (bucket `tempo-statusbar-releases`), uploaded via GitHub OIDC (`AWS_ROLE_ARN` secret) — not as GitHub Release assets (#177). The Linux tray app releases separately as a GitHub release asset, not via S3 (#192).
+Seven Forgejo Actions workflows in `.forgejo/workflows/` — see [ci-cd.md](ci-cd.md) for full details. CI never uses `gh`: release, tag and comment operations call the Forgejo API with `curl` (Linux, tools from the flake `ci` devShell) or `/usr/bin/python3` (Mac). DMGs are stored in S3 (bucket `tempo-statusbar-releases`), uploaded via Forgejo OIDC (`enable-openid-connect: true`, `AWS_ROLE_ARN` secret) — not as release assets (#177). The Linux tray app releases separately as a Forgejo release asset, not via S3 (#192).
 
 | Workflow | Trigger | Key jobs |
 |---|---|---|
 | `linux-ci.yml` | PRs/pushes touching `linux/**`, `flake.nix`, `flake.lock` | `cargo fmt --check`, clippy, test, release build — all via `nix develop` on `[self-hosted, linux]` |
-| `linux-release.yml` | Push to `main` touching `linux/**`, `flake.nix`, `flake.lock`, manual | Version-gated: builds `.#static` (musl), asserts static linkage + `--version` match, tags `linux-vX.Y.Z`, publishes tarball + `.sha256` as GitHub release assets |
+| `linux-release.yml` | Push to `main` touching `linux/**`, `flake.nix`, `flake.lock`, manual | Version-gated: builds `.#static` (musl), asserts static linkage + `--version` match, tags `linux-vX.Y.Z`, publishes tarball + `.sha256` as Forgejo release assets via the API |
 | `pr-verification.yml` | PRs to `main` | Build+test (with signing), SwiftLint, Trivy scan, DMG upload to `s3://…/pr/<N>/`, PR comment |
 | `pr-cleanup.yml` | PR `closed` | Deletes the PR's `pr/<N>/` prefix from S3 |
 | `main-verification.yml` | Push to `main`, manual | Build (with signing), Trivy scan, docs check |
-| `release-tag.yml` | Release events, manual | Release build (with signing), DMG upload to `s3://…/releases/`, download link in release notes, Trivy scan, docs check — skipped for `linux-v*` releases |
+| `release-tag.yml` | Forgejo `release: published`, manual | Release build (with signing), DMG upload to `s3://…/releases/`, download link in release notes, Trivy scan, docs check — skipped for `linux-v*` releases |
 | `s3-bootstrap.yml` | Manual only | One-time idempotent provisioning of the S3 bucket + OIDC role (uses temporary bootstrap credentials, then decommissioned) |
-| `actions-storage-cleanup.yml` | Push to `main` (primary), daily 05:00 UTC backstop, manual | Purges all GHA caches and artifacts older than 3 days to protect org storage quota |
 
 Main-branch build failures are not handled by a workflow in this repo: Claws' central `main-build-monitor` job watches every `push`/`schedule` run of these workflows on `main`, retries once when the failure looks transient, files a `Build failure: <workflow>` issue here otherwise, and closes it with a comment once a later run of the same workflow succeeds — see [ci-cd.md](ci-cd.md#main-branch-failure-monitoring).
 
-`.github/dependabot.yml` (not a workflow) enables weekly dependency updates for the `github-actions` (`/`) and `cargo` (`/linux`) ecosystems, each grouped into a single PR — see [ci-cd.md](ci-cd.md#githubdependabotyml--dependency-updates).
+Dependency updates come from the Forgejo-side Renovate run configured in `St-John-Software/fleet-infra` (Dependabot is gone): its `github-actions` manager covers `.forgejo/workflows/` and its `cargo` manager covers `linux/Cargo.toml` — see [ci-cd.md](ci-cd.md#dependency-updates--renovate). Trivy runs in PR, main and release workflows and fails the job only on CRITICAL findings with a fix available.
 
-All macOS jobs start with a shared `Select Xcode` step that resolves the newest installed Xcode on the runner and exports a job-scoped `DEVELOPER_DIR` (no `sudo`, no machine-global `xcode-select` — the two Macs are shared with namey and bonkus CI). PR and main workflows use `cancel-in-progress: true`; the release workflow uses `cancel-in-progress: false`. Build/test/quality jobs run on `[self-hosted, macos, tempo]`; utility jobs (security scans, docs checks, PR cleanup) run on `[self-hosted, linux]`. Changes are batched and the number of PRs is kept low to reduce queue wait times.
+All macOS jobs start with a shared `Select Xcode` step that resolves the newest installed Xcode on the runner and exports a job-scoped `DEVELOPER_DIR` (no `sudo`, no machine-global `xcode-select` — the two Macs are shared with namey and bonkus CI). PR and main workflows use `cancel-in-progress: true`; the release workflow uses `cancel-in-progress: false`. Build/test/quality jobs run on `[self-hosted, macos, tempo]`; Linux jobs (security scans, docs checks, Linux CI/release, PR cleanup, S3 bootstrap) run on `[self-hosted, linux]`. Changes are batched and the number of PRs is kept low to reduce queue wait times.
 
-All build jobs sign the `.app` bundle using a Developer ID Application certificate stored as repository secrets (`SIGNING_CERT_P12_BASE64`, `SIGNING_CERT_PASSWORD`, `KEYCHAIN_PASSWORD`). The certificate is imported into a temporary keychain at build time and verified with `codesign --verify --deep --strict` before DMG packaging. See [ci-cd.md](ci-cd.md#code-signing) for full details.
+All build jobs sign the `.app` bundle using a Developer ID Application certificate stored as Forgejo Actions secrets (`SIGNING_CERT_P12_BASE64`, `SIGNING_CERT_PASSWORD`, `KEYCHAIN_PASSWORD`). The certificate is imported into a temporary keychain at build time and verified with `codesign --verify --deep --strict` before DMG packaging. See [ci-cd.md](ci-cd.md#code-signing) for full details.
 
 ## Testing
 
@@ -371,7 +359,7 @@ Tests live in `TempoStatusBarAppTests/`. The custom shell script `run_tests.sh` 
 |---|---|
 | `WorklogStateManagerTests` | Initial state, credential loading, data fetching, error handling (including network retry), computed status properties, data clearing |
 | `ConnectionTestTests` | `runConnectionTest` — Account ID mismatch, case-insensitive match, key-field fallback, nil identity fields, fetch-user-info errors, empty accountId bypass |
-| `CredentialManagerHasStoredCredentialsTests` | `hasStoredCredentials()` before/after save and delete (hits the real Keychain; whole suite is skipped when `TEMPO_SKIP_KEYCHAIN_TESTS=1`, as set on the shared self-hosted CI runners — see [ci-cd.md](ci-cd.md#key-design-decisions)) |
+| `CredentialManagerHasStoredCredentialsTests` | `hasStoredCredentials()` before/after save and delete (hits the real Keychain; whole suite is skipped when `TEMPO_SKIP_KEYCHAIN_TESTS=1`, as set on the shared self-hosted CI runners — see [ci-cd.md](ci-cd.md#key-design-decisions)). The same flag also skips `WorklogStateManager.init()`'s startup Keychain/network work, so the ad-hoc-signed test host app never touches the real login keychain when launched on the runner. |
 | `WorklogDaysSinceStartedTests` | `Worklog.daysSinceStarted` — today (0), N days ago, malformed date, ISO8601 with timezone, future date |
 
 ### `UpdateCheckerTests.swift` — one test class + `MockURLProtocol`

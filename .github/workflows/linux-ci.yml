@@ -1,3 +1,9 @@
+# GitHub-only copy, kept solely so the final GitHub PR of the Forgejo
+# migration (#clw_01M45RN20AQVB7Y7X1MTQRB3DA) passes its required checks.
+# Forgejo ignores .github/workflows/ once .forgejo/workflows/ exists, so this
+# never runs there; the canonical workflow is .forgejo/workflows/linux-ci.yml. The
+# GitHub repo is archived after the migration.
+
 name: Linux CI
 
 # Triggers removed for the public snapshot — this workflow is intentionally disabled.

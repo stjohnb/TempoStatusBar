@@ -37,7 +37,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # "v1" exposes the simple Entry API; the zbus store talks to the freedesktop
 # Secret Service without linking libdbus.
 keyring = { version = "4", default-features = false, features = ["v1", "zbus-secret-service-keyring-store"] }
-dirs = "6"
+dirs = "7"
 clap = { version = "4", features = ["derive"] }
 rpassword = "7"
 thiserror = "2"

@@ -58,13 +58,23 @@
           buildInputs = [ pkgs.gtk4 pkgs.glib ];
         };
 
-        # Minimal shell for workflow steps that only shell out to the GitHub
-        # CLI — linux-release.yml's version gate and release publish, and
-        # actions-storage-cleanup.yml. Kept separate from `default` so a
-        # gh-only job never realises the Rust + GTK4 closure. The runner
-        # baseline is nix/git/docker only; `gh` is not on it (issue #218).
+        # Minimal shell for Linux workflow steps that talk to the Forgejo API
+        # or AWS — .forgejo/workflows/linux-ci.yml's PR comment,
+        # linux-release.yml's version gate and release publish, pr-cleanup.yml
+        # and s3-bootstrap.yml. Kept separate from `default` so these jobs
+        # never realise the Rust + GTK4 closure. The runner baseline is
+        # nix/git/docker only (issue #218); CI uses curl against the Forgejo
+        # API, not `gh`.
         ci = pkgs.mkShell {
-          packages = [ pkgs.gh pkgs.jq ];
+          packages = [ pkgs.curl pkgs.jq pkgs.awscli2 ];
+        };
+
+        # Minimal shell for the Trivy filesystem scan in main-verification.yml,
+        # pr-verification.yml and release-tag.yml. Replaces
+        # aquasecurity/trivy-action, whose runtime download of the Trivy binary
+        # from GitHub releases failed Main Verification (issue #237).
+        security = pkgs.mkShell {
+          packages = [ pkgs.trivy ];
         };
       });
 

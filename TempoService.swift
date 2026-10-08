@@ -44,7 +44,15 @@ class WorklogStateManager: ObservableObject {
     var credentialManager: CredentialManagerProtocol = CredentialManager.shared
     var tempoService: TempoServiceProtocol = TempoService.shared
 
+    // Set by CI (TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS) so the ad-hoc-signed test
+    // host app never touches the real login keychain when it launches in the
+    // runner's GUI session, which could prompt for access (#234).
+    private static var isKeychainAccessDisabled: Bool {
+        ProcessInfo.processInfo.environment["TEMPO_SKIP_KEYCHAIN_TESTS"] == "1"
+    }
+
     init() {
+        guard !Self.isKeychainAccessDisabled else { return }
         setupTimer()
         setupNetworkMonitor()
         checkCredentialsAndRefresh()
