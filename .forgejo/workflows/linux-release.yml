@@ -8,6 +8,8 @@ on:
       - 'flake.nix'
       - 'flake.lock'
       - '.forgejo/workflows/linux-release.yml'
+  # Dispatch on main to re-run after a runner outage. If linux-vX.Y.Z already
+  # exists, the gate step logs a notice and the run is a green no-op.
   workflow_dispatch:
 
 permissions:

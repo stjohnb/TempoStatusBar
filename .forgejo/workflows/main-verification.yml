@@ -214,12 +214,15 @@ jobs:
         echo "=== codesign --verify --deep --strict ==="
         codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
+        # Capture once: piping codesign into `grep -q` under pipefail fails with SIGPIPE (exit 141).
+        SIG_INFO=$(codesign --display --verbose=2 "$APP_PATH" 2>&1)
+
         echo "=== Identity must be a Developer ID Application cert ==="
-        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=Developer ID Application:' \
+        grep -q 'Authority=Developer ID Application:' <<<"$SIG_INFO" \
           || { echo "❌ Expected Authority=Developer ID Application: not found"; exit 1; }
 
         echo "=== Hardened Runtime must be enabled ==="
-        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'flags=.*runtime' \
+        grep -q 'flags=.*runtime' <<<"$SIG_INFO" \
           || { echo "❌ Hardened Runtime flag not present in signature"; exit 1; }
 
         echo "✅ Code signature verified (Developer ID + Hardened Runtime; notarization happens on release tags only)"
@@ -259,7 +262,8 @@ jobs:
         # Only self-heal the default keychain if it was left pointing at a
         # build keychain (left over from a run that predates #234); never
         # touch it otherwise, since we no longer change it ourselves.
-        if security default-keychain -d user 2>/dev/null | grep -q 'build.keychain-db'; then
+        DEFAULT_KC=$(security default-keychain -d user 2>/dev/null || true)
+        if grep -q 'build.keychain-db' <<< "$DEFAULT_KC"; then
           security default-keychain -d user -s login.keychain-db 2>/dev/null || true
         fi
 

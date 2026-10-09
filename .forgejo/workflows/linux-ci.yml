@@ -79,6 +79,7 @@ jobs:
       # marker instead.
       if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
       continue-on-error: true
+      timeout-minutes: 2
       env:
         FORGEJO_TOKEN: ${{ github.token }}
         API_URL: ${{ github.api_url }}
@@ -99,15 +100,11 @@ jobs:
         EOF2
         )
         PAYLOAD=$(jq -n --arg b "$BODY" '{body: $b}')
-        EXISTING=""
-        PAGE=1
-        while [ -z "$EXISTING" ]; do
-          RESP=$(curl -fsS -H "Authorization: token $FORGEJO_TOKEN" \
-            "$API_URL/repos/$REPO/issues/$PR_NUMBER/comments?page=$PAGE&limit=50")
-          [ "$(echo "$RESP" | jq 'length')" -eq 0 ] && break
-          EXISTING=$(echo "$RESP" | jq -r --arg m "$MARKER" 'map(select(.body | contains($m))) | .[0].id // empty')
-          PAGE=$((PAGE + 1))
-        done
+        # Forgejo's issue-comments endpoint ignores page/limit and always
+        # returns every comment, so fetch once — paging would loop forever.
+        RESP=$(curl -fsS --max-time 30 -H "Authorization: token $FORGEJO_TOKEN" \
+          "$API_URL/repos/$REPO/issues/$PR_NUMBER/comments")
+        EXISTING=$(echo "$RESP" | jq -r --arg m "$MARKER" 'map(select(.body | contains($m))) | .[0].id // empty')
         if [ -n "$EXISTING" ]; then
           curl -fsS -X PATCH -H "Authorization: token $FORGEJO_TOKEN" \
             -H 'Content-Type: application/json' -d "$PAYLOAD" \

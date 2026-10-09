@@ -286,12 +286,15 @@ jobs:
         echo "=== codesign --verify --deep --strict ==="
         codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
+        # Capture once: piping codesign into `grep -q` under pipefail fails with SIGPIPE (exit 141).
+        SIG_INFO=$(codesign --display --verbose=2 "$APP_PATH" 2>&1)
+
         echo "=== Identity must be a Developer ID Application cert ==="
-        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'Authority=Developer ID Application:' \
+        grep -q 'Authority=Developer ID Application:' <<<"$SIG_INFO" \
           || { echo "❌ Expected Authority=Developer ID Application: not found"; exit 1; }
 
         echo "=== Hardened Runtime must be enabled ==="
-        codesign --display --verbose=2 "$APP_PATH" 2>&1 | grep -q 'flags=.*runtime' \
+        grep -q 'flags=.*runtime' <<<"$SIG_INFO" \
           || { echo "❌ Hardened Runtime flag not present in signature"; exit 1; }
 
         echo "✅ Code signature verified"
@@ -396,6 +399,7 @@ jobs:
       # no `type: "Bot"` field.
       if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
       continue-on-error: true
+      timeout-minutes: 2
       env:
         FORGEJO_TOKEN: ${{ github.token }}
         API_URL: ${{ github.api_url }}
@@ -435,17 +439,13 @@ jobs:
             req = urllib.request.Request(f"{api}{path}", data=data, method=method)
             req.add_header("Authorization", f"token {os.environ['FORGEJO_TOKEN']}")
             req.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=30) as resp:
                 return json.load(resp)
 
-        existing = None
-        page = 1
-        while existing is None:
-            comments = call("GET", f"/repos/{repo}/issues/{pr}/comments?page={page}&limit=50")
-            if not comments:
-                break
-            existing = next((c for c in comments if marker in (c.get("body") or "")), None)
-            page += 1
+        # Forgejo's issue-comments endpoint ignores page/limit and always
+        # returns every comment, so fetch once — paging would loop forever.
+        comments = call("GET", f"/repos/{repo}/issues/{pr}/comments")
+        existing = next((c for c in comments if marker in (c.get("body") or "")), None)
         if existing:
             call("PATCH", f"/repos/{repo}/issues/comments/{existing['id']}", {"body": body})
         else:
@@ -473,7 +473,8 @@ jobs:
         # Only self-heal the default keychain if it was left pointing at a
         # build keychain (left over from a run that predates #234); never
         # touch it otherwise, since we no longer change it ourselves.
-        if security default-keychain -d user 2>/dev/null | grep -q 'build.keychain-db'; then
+        DEFAULT_KC=$(security default-keychain -d user 2>/dev/null || true)
+        if grep -q 'build.keychain-db' <<< "$DEFAULT_KC"; then
           security default-keychain -d user -s login.keychain-db 2>/dev/null || true
         fi
 

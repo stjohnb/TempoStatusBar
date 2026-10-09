@@ -180,6 +180,11 @@ loudly rather than being read as "tag absent". Every later step is
 `if: steps.gate.outputs.release == 'true'`, so a `linux/**` merge without a
 version bump is a green no-op.
 
+A job that fails in about 0 s with no step run means the runner could not
+start the job container (on 2026-10-07 this was a swept `forgejo-runner-nix`
+image tag). It is not a workflow defect. Once the runners are healthy,
+re-run with `workflow_dispatch` on `main`.
+
 Two assertions run before anything is published: `readelf -l | grep -q INTERP`
 fails the job if `.#static` produced a dynamically-linked binary, and
 `tempo-statusbar --version` must equal the tag's version. Only `--version` is
@@ -332,6 +337,8 @@ The release and PR workflows additionally **notarize and staple** the DMG so Gat
 7. Build — Xcode signs the `.app` bundle using the Developer ID identity (with Hardened Runtime)
 8. Verify: `codesign --verify --deep --strict`, assert `Authority=Developer ID Application:` is present, and assert the `runtime` flag appears in the signature flags
 9. Post-run: remove any `build.keychain-db` entries from the search list, reset the default keychain only if it currently points at one, and delete the temporary keychain (`security delete-keychain`)
+
+**SIGPIPE pitfall:** steps run under `bash -e -o pipefail`, so never pipe `codesign`/`security` output into `grep -q` — `grep -q` exits on first match, the writer gets SIGPIPE (exit 141) and the pipeline fails. Capture the output into a variable first (`SIG_INFO=$(codesign … 2>&1)`) and grep it with a here-string. The signature checks and keychain cleanup in all three Mac workflows follow this pattern.
 
 **Notarization (release and PR workflows):**
 
