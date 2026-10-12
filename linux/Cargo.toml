@@ -25,19 +25,19 @@ gui = ["dep:gtk4"]
 # Native settings/status windows. Optional by design — see the note above.
 # The API level is pinned at GTK 4.12 (August 2023): 4.10 for
 # `gtk::AlertDialog`, 4.12 for `CssProvider::load_from_string`.
-gtk4 = { version = "0.11", optional = true, features = ["v4_12"] }
+gtk4 = { version = "0.11.5", optional = true, features = ["v4_12"] }
 # Pure-Rust StatusNotifierItem tray (zbus, no libdbus): the "blocking" feature
 # gives a non-async API so the app needs no async runtime.
-ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
+ksni = { version = "0.3.6", default-features = false, features = ["blocking", "async-io"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 # "v1" exposes the simple Entry API; the zbus store talks to the freedesktop
 # Secret Service without linking libdbus.
-keyring = { version = "4", default-features = false, features = ["v1", "zbus-secret-service-keyring-store"] }
+keyring = { version = "4.2.0", default-features = false, features = ["v1", "zbus-secret-service-keyring-store"] }
 dirs = "7"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"] }
 rpassword = "7"
 thiserror = "2"
