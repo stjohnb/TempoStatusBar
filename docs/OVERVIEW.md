@@ -369,3 +369,9 @@ Tests live in `TempoStatusBarAppTests/`. The custom shell script `run_tests.sh` 
 | `UpdateCheckerTests` | `parseSemver` (v-prefix, uppercase V, no prefix, unknown/empty/prerelease returns nil), `compare` (numeric ordering, padding, equal), `checkForUpdates` (unknown version skipped, HTTP 404 returns `.skipped`, HTTP 200 newer/same tag, HTTP 401/non-200 returns `.failed`, transport error, malformed JSON) |
 
 `MockURLProtocol` is a `URLProtocol` subclass that intercepts all requests made through an ephemeral `URLSession`. Tests inject it by setting `UpdateChecker.shared.session` to a session whose `URLSessionConfiguration.ephemeral.protocolClasses` includes `MockURLProtocol`. The static `handler` closure returns the desired `(Data, URLResponse)` or throws to simulate transport errors. This keeps update-checker tests entirely offline.
+
+## Related repositories
+
+Claws generates this section from verified evidence only — `deploys` entries in `claws.json`, workflow dispatches, container image references in YAML manifests, and OIDC trust-policy subjects in Terraform/OpenTofu files. To change it, edit that evidence, not this section.
+
+No deployment, configuration or provisioning relationship with another managed repository was found in these evidence sources.
