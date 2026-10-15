@@ -41,9 +41,10 @@ Tempo API changes and `docs/ci-cd.md` for workflow changes.
 - macOS 12 minimum: `SMAppService` and other 13+ APIs must be gated with
   `if #available(macOS 13, *)`.
 - CI: the canonical repo is on Forgejo and workflows live in
-  `.forgejo/workflows/`; flag edits to the inert `.github/workflows/` copies
-  and any `gh` use in CI (Forgejo API calls use `curl`). macOS jobs run on
-  `[self-hosted, macos, tempo]`; Linux jobs run on `[self-hosted, linux]`. Reject `macos-latest`, `macos-15`,
+  `.forgejo/workflows/`; flag any `.github/workflows/` files (deleted; only
+  `.github/actions/setup-nix` remains) and any `gh` use in CI (Forgejo API
+  calls use `curl`). macOS jobs run on `[self-hosted, macos, tempo]`; Linux
+  jobs run on `[self-hosted, linux]`. Reject `macos-latest`, `macos-15`,
   `ubuntu-latest`, `ubuntu-22.04`, `windows-latest`, and bare
   `runs-on: self-hosted`. The two Macs are shared with bonkus/namey CI — flag
   changes that needlessly multiply PRs or re-trigger the macOS jobs.

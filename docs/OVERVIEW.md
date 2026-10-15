@@ -33,7 +33,6 @@ linux/                         Linux tray app (Rust) — see "Linux App" below
 flake.nix                      Nix dev shell + package for the Linux app
 .forgejo/workflows/            CI/CD (PR, main, release, Linux) — Forgejo Actions
 .github/actions/               Composite actions (setup-nix), used by .forgejo/workflows/
-.github/workflows/             Inert GitHub-only copies kept for the migration — never edit
 README.md                      Private-repo README (setup/config instructions)
 README.public.md               Source for the public repo's README — see "Public Snapshot" below
 ```

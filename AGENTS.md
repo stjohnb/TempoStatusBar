@@ -10,7 +10,7 @@ TempoStatusBar is primarily a macOS menu bar app that polls Jira Tempo Server/Da
 
 ## Key Conventions
 
-- The canonical repo is on Forgejo (`git.home.bstjohn.net/St-John-Software/TempoStatusBar`); the GitHub copy is archived. CI workflows live in `.forgejo/workflows/` — `.github/workflows/` holds inert copies kept only for the migration, and `.github/actions/setup-nix` is still used. CI never uses `gh`; Forgejo API calls use `curl`. The Linux tarball is a Forgejo release asset, mirrored with the latest release to the public GitHub repo `stjohnb/TempoStatusBar` by Claws.
+- The canonical repo is on Forgejo (`git.home.bstjohn.net/St-John-Software/TempoStatusBar`); the GitHub copy is archived. CI workflows live only in `.forgejo/workflows/`; `.github/actions/setup-nix` is still used. CI never uses `gh`; Forgejo API calls use `curl`. The Linux tarball is a Forgejo release asset, mirrored with the latest release to the public GitHub repo `stjohnb/TempoStatusBar` by Claws.
 - All source files for the macOS app live flat at the repo root; `linux/` is a separate Rust crate and must not be treated as shared code.
 - `WorklogStateManager.shared` is the macOS single source of truth, stays on the main actor, and drives UI through `@Published` state.
 - Credentials are sensitive. Never log or print `apiToken`, `githubToken`, Linux `token_command` stdout, or any other credential value.

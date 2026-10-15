@@ -15,16 +15,11 @@ cover the full development lifecycle: `pr-verification.yml`,
 `main-verification.yml`, `linux-ci.yml`, `linux-release.yml`,
 `release-tag.yml`, `pr-cleanup.yml` and `s3-bootstrap.yml`.
 
-`.github/workflows/` still holds copies of `pr-verification.yml` and
-`linux-ci.yml`, kept only so the last GitHub PR of the migration could pass
-its required checks. Forgejo ignores `.github/workflows/` entirely once
-`.forgejo/workflows/` exists, and the GitHub repo is archived after the
-migration — never edit those copies. `.github/actions/setup-nix` is still
-live: Forgejo workflows reference it by path.
+`.github/` holds only the `setup-nix` composite action, which Forgejo workflows reference by path.
 
 ### Common Settings (all workflows)
 
-- **Runners:** Self-hosted `[self-hosted, macos, tempo]` for build/test/quality jobs; `[self-hosted, linux]` for security scans, documentation checks, Linux CI/release, PR cleanup and the S3 bootstrap. The Mac Forgejo runner declares exactly those labels. The `tempo` label pins these jobs to the Mac that does **not** run the real TempoStatusBarApp: signing jobs put a temp keychain into the runner user's keychain search list, and on a Mac where the real app is polling, that triggers keychain-unlock dialogs in the user's session. Signing no longer changes the default keychain (#234), but the `tempo` pin stays as defence in depth. Machine-level documentation for the two shared Macs — inventory, runner-label semantics, registration and Xcode-install runbooks — is centralised in the nixos-config repo: [docs/macos-runners.md](https://github.com/St-John-Software/nixos-config/blob/main/docs/macos-runners.md).
+- **Runners:** Self-hosted `[self-hosted, macos, tempo]` for build/test/quality jobs; `[self-hosted, linux]` for security scans, documentation checks, Linux CI/release, PR cleanup and the S3 bootstrap. The Mac Forgejo runner declares exactly those labels. The `tempo` label pins these jobs to the Mac that does **not** run the real TempoStatusBarApp: signing jobs put a temp keychain into the runner user's keychain search list, and on a Mac where the real app is polling, that triggers keychain-unlock dialogs in the user's session. Signing no longer changes the default keychain (#234), but the `tempo` pin stays as defence in depth. Machine-level documentation for the two shared Macs — inventory, runner-label semantics, registration and Xcode-install runbooks — is centralised in the nixos-config repo: [docs/macos-runners.md](https://git.home.bstjohn.net/St-John-Software/nixos-config/src/branch/main/docs/macos-runners.md).
 - **Xcode:** every macOS job starts with a shared `Select Xcode` step that finds the newest non-beta Xcode under `/Applications` and exports a **job-scoped `DEVELOPER_DIR`**. It deliberately does *not* use `maxim-lobanov/setup-xcode` or `xcode-select`: those change the machine-global active Xcode via `sudo`, and the two Macs are shared with namey and bonkus CI (which use the same step). No job may mutate machine-global state.
 - **Homebrew on the Mac:** the Forgejo host runner's `PATH` omits Homebrew, so Mac jobs that need `swiftlint` or `aws` run an "Expose Homebrew" step that appends `/opt/homebrew/bin` and `/usr/local/bin` to `$GITHUB_PATH` when they exist. Mac jobs never use nix — the flake targets Linux only — so JSON/HTTP work on the Mac uses the Xcode CLT `/usr/bin/python3`.
 - **Remote actions:** every `uses:` is a full URL pinned to a commit SHA — `https://github.com/actions/checkout@<sha>  # v7.0.1`, `https://github.com/aws-actions/configure-aws-credentials@<sha>  # v6.3.0` — plus `https://code.forgejo.org/forgejo/upload-artifact@v4` (upstream `actions/upload-artifact` v4+ does not work on Forgejo). `./.github/actions/setup-nix` is referenced by path.
