@@ -108,6 +108,18 @@ each run the same pair inside the flake's `security` devShell:
 2. `trivy fs --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 .`
    — fails the job on any CRITICAL finding that has a fix available.
 
+Before the pair, a "Download Trivy vulnerability DB" step fetches the DB with
+`trivy fs --download-db-only` from `mirror.gcr.io`, then `ghcr.io`, then
+`public.ecr.aws`, retrying 4 times (20/40/60/90 s backoff). If the DB still
+cannot be fetched the job fails with an explicit "the scan did NOT run" error
+rather than passing; both scans then run with `--skip-db-update`.
+
+**Root cause of the run 104 failure:** `mirror.gcr.io` returned a transient
+`BLOB_UNKNOWN`, and the `ghcr.io` fallback was dead by design — the Forgejo
+runner exports `GITHUB_TOKEN`/`GITHUB_ACTOR`, Trivy's keychain presents them to
+`ghcr.io`, and `ghcr.io` answers `DENIED: denied`. The Trivy steps blank both
+variables. `production-infra`'s `scripts/image-scan.py` applies the same fix.
+
 If the gate goes red, fix the dependency rather than loosening the gate.
 
 ---
@@ -360,7 +372,7 @@ The release and PR workflows additionally **notarize and staple** the DMG so Gat
 - **Artifact retention** — `test-results` (xcresult) artifacts: 3 days for both PRs and main. PR build DMGs live under `s3://<bucket>/pr/<N>/` and are deleted when the PR closes (`pr-cleanup.yml`; 30-day lifecycle backstop). Tagged-release DMGs live under `s3://<bucket>/releases/` and do not expire. Forgejo runners have caches off and no org storage quota, so there is no storage-cleanup workflow.
 - **Fork PRs** — the signing, S3 upload and PR comment steps are skipped for forks (Forgejo fork PRs get no secrets and no OIDC token). Fork contributors who need to test their build should either rebase onto the upstream repo or build locally with Xcode.
 - **SwiftLint** — installed at CI runtime via `brew` (after the Expose Homebrew step); configuration in `.swiftlint.yml`.
-- **Trivy** — comes from the repo's `flake.nix` `security` devShell, not a runtime download, so its version is pinned by `flake.lock` alongside the rest of the toolchain; bumping Trivy means bumping nixpkgs in `flake.lock` (issue #237, replacing `aquasecurity/trivy-action@master`, whose runtime download from GitHub releases had failed Main Verification). No Actions caching is used — the self-hosted Linux runners already persist the Trivy DB on local disk between runs. See [Trivy gating](#trivy-gating) for what fails the job.
+- **Trivy** — comes from the repo's `flake.nix` `security` devShell, not a runtime download, so its version is pinned by `flake.lock` alongside the rest of the toolchain; bumping Trivy means bumping nixpkgs in `flake.lock` (issue #237, replacing `aquasecurity/trivy-action@master`, whose runtime download from GitHub releases had failed Main Verification). No Actions caching is used — the "Download Trivy vulnerability DB" step re-fetches the DB when the local cache is stale (run 104 showed `Need to update DB`). The DB fallback chain and the blanked `GITHUB_*` variables live in the workflow steps. See [Trivy gating](#trivy-gating) for what fails the job.
 - **SHA pinning for remote actions** — every remote `uses:` is a full `https://…@<sha>  # vX.Y.Z` URL, not a tag or moving ref. Actions that mint cloud credentials or write to public distribution points carry higher supply-chain risk if compromised. Renovate bumps both the SHA and the trailing comment together, so the pin does not silently go stale. When updating a pin manually, resolve the tag to its commit SHA on the action's upstream repo before committing.
 - **PR comment body construction** — the Mac comment is built in a `/usr/bin/python3` heredoc (`<<'PY'`, so the shell does not expand anything inside) and the Linux comment in a bash heredoc passed through `jq --arg`, so neither has to fight YAML block-scalar indentation. The download URL is constructed deterministically from the PR number and version string — no artifact lookup is needed.
 - **`MARKETING_VERSION` CLI override** — Release and PR `xcodebuild` invocations pass `MARKETING_VERSION=<tag-version>` on the command line. This overrides the value hardcoded in `project.pbxproj` and ensures `appVersion`, `CFBundleShortVersionString`, and the About alert all report the release tag (e.g. `1.3.0`), not the stale project-file value (#105).

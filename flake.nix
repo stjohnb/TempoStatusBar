@@ -83,8 +83,10 @@
         # mirror — keep the attribute name.
         default = mkTempoStatusBar { inherit pkgs; rustPlatform = pkgs.rustPlatform; gui = true; };
         # Fully static musl build — the published release artifact. This works
-        # only because of the feature flags this crate chose: rustls-tls +
-        # webpki-roots (no rustls-native-certs, so no system cert store),
+        # only because of the feature flags this crate chose: reqwest's
+        # rustls-no-provider plus a ring/webpki-roots config built in
+        # tempo.rs (not reqwest's "rustls" feature, whose aws-lc-rs provider
+        # needs a C/cmake toolchain; the system cert store is never consulted),
         # ksni's zbus backend (no libdbus-sys), and no openssl-sys/native-tls.
         # `ring` is the only crate with C/asm and it builds for musl.
         #

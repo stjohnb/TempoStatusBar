@@ -3,6 +3,7 @@
 //! Mirrors `TempoService.swift` — same two endpoints, same identifier
 //! resolution, same error cases. See `docs/api-design.md`.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, TimeZone};
@@ -113,6 +114,22 @@ pub fn most_recent_worklog(worklogs: &[Worklog]) -> Option<&Worklog> {
         .map(|(_, worklog)| worklog)
 }
 
+/// rustls with the ring provider and the compiled-in webpki-roots trust
+/// store: reqwest 0.13's own rustls setup would use aws-lc-rs and the system
+/// cert store, neither of which the static musl build can rely on.
+fn tls_config() -> Result<rustls::ClientConfig, TempoError> {
+    let roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|_| TempoError::NetworkError)?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok(config)
+}
+
 pub struct TempoClient {
     http: reqwest::blocking::Client,
 }
@@ -120,6 +137,7 @@ pub struct TempoClient {
 impl TempoClient {
     pub fn new() -> Result<Self, TempoError> {
         let http = reqwest::blocking::Client::builder()
+            .tls_backend_preconfigured(tls_config()?)
             .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|_| TempoError::NetworkError)?;
@@ -202,6 +220,13 @@ mod tests {
 
     fn date(year: i32, month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).expect("valid date")
+    }
+
+    /// A rustls version mismatch with reqwest makes `build()` reject the
+    /// preconfigured config as an unknown TLS backend.
+    #[test]
+    fn builds_a_client_with_the_preconfigured_tls_backend() {
+        assert!(TempoClient::new().is_ok());
     }
 
     #[test]

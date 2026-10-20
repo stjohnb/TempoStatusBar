@@ -285,17 +285,45 @@ jobs:
     - name: Set up Nix
       uses: ./.github/actions/setup-nix
 
+    - name: Download Trivy vulnerability DB
+      # The Forgejo runner exports GITHUB_TOKEN/GITHUB_ACTOR; Trivy's keychain
+      # presents them to ghcr.io, which answers "DENIED: denied" and kills the
+      # fallback DB download (issue #clw_01M5A80N3B56SC6Q7ATS3MS3SK). Blank both.
+      env:
+        GITHUB_TOKEN: ""
+        GITHUB_ACTOR: ""
+      run: |
+        set -euo pipefail
+        NIX_FLAGS="--extra-experimental-features nix-command --extra-experimental-features flakes"
+        DB_REPOS="--db-repository mirror.gcr.io/aquasec/trivy-db:2 --db-repository ghcr.io/aquasecurity/trivy-db:2 --db-repository public.ecr.aws/aquasecurity/trivy-db:2"
+        backoff=(20 40 60 90)
+        attempt=0
+        until nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#security" --command \
+            trivy fs --download-db-only --no-progress $DB_REPOS .; do
+          if [ "$attempt" -ge "${#backoff[@]}" ]; then
+            echo "::error::Trivy vulnerability DB could not be downloaded after $((attempt + 1)) attempts; the scan did NOT run (scan-infrastructure failure, not a vulnerability finding)"
+            exit 1
+          fi
+          echo "::warning::Trivy DB download failed (attempt $((attempt + 1))); retrying in ${backoff[$attempt]}s"
+          sleep "${backoff[$attempt]}"
+          attempt=$((attempt + 1))
+        done
+        echo "Trivy vulnerability DB downloaded; running scan"
+
     - name: Run Trivy vulnerability scanner
       # No code-scanning upload on Forgejo: HIGH+CRITICAL findings are printed
       # as a table for the log, and only CRITICAL findings with a fix
       # available fail the job. If this goes red, fix the dependency rather
       # than loosening the gate.
+      env:
+        GITHUB_TOKEN: ""
+        GITHUB_ACTOR: ""
       run: |
         NIX_FLAGS="--extra-experimental-features nix-command --extra-experimental-features flakes"
         nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#security" --command \
-          trivy fs --scanners vuln --severity HIGH,CRITICAL --format table .
+          trivy fs --skip-db-update --scanners vuln --severity HIGH,CRITICAL --format table .
         nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#security" --command \
-          trivy fs --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 .
+          trivy fs --skip-db-update --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 .
 
   documentation-check:
     name: Documentation Check

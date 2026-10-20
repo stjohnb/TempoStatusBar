@@ -284,10 +284,13 @@ binary at `./result/bin/tempo-statusbar` — the published release artifact.
 that attribute name.
 
 The static build is **contingent on the crate's feature choices**: `reqwest`
-uses `rustls-tls` with `webpki-roots` (trust roots compiled in, so no system
-cert store and no `SSL_CERT_FILE`), `ksni` uses its pure-Rust zbus backend (no
-`libdbus-sys`), and nothing pulls `openssl-sys` or `native-tls`. `ring` is the
-only crate with C/asm and it builds for musl. Swapping any of those silently
+uses `rustls-no-provider`, and `tempo.rs` hands it a preconfigured rustls
+config with the `ring` provider and `webpki-roots` (trust roots compiled in, so
+no system cert store and no `SSL_CERT_FILE`; reqwest's `rustls` feature would
+pull in `aws-lc-rs`, which needs a C/cmake toolchain), `ksni` uses its pure-Rust
+zbus backend (no `libdbus-sys`), and nothing pulls `openssl-sys` or
+`native-tls`. `ring` is the only crate with C/asm and it builds for musl.
+Swapping any of those silently
 breaks the static build — `linux/Cargo.toml` carries the same warning.
 
 The GTK4 GUI is the reason the crate has a `gui` feature at all. No Rust GUI

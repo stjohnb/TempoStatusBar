@@ -7,11 +7,11 @@ publish = false
 
 # The release artifact is a fully static x86_64-unknown-linux-musl binary
 # (`nix build .#static`). That is a consequence of the feature flags below:
-# reqwest uses rustls-tls with webpki-roots (trust roots compiled in — no
-# system cert store, no SSL_CERT_FILE), ksni uses its pure-Rust zbus backend
-# (no libdbus-sys), and nothing pulls openssl-sys or native-tls. Swapping any
-# of those, or adding a crate that links a C library other than `ring`,
-# silently breaks the static build. Check `nix build .#static` if you do.
+# reqwest uses rustls (ring provider) with webpki-roots (trust roots compiled
+# in — no system cert store, no SSL_CERT_FILE), ksni uses its pure-Rust zbus
+# backend (no libdbus-sys), and nothing pulls openssl-sys or native-tls.
+# Swapping any of those, or adding a crate that links a C library other than
+# `ring`, silently breaks the static build. Check `nix build .#static` if you do.
 #
 # The GTK4 GUI is therefore *optional*: `nix build .#static` passes
 # `--no-default-features`, so gtk4 is not in that dependency graph at all.
@@ -29,15 +29,21 @@ gtk4 = { version = "0.11.5", optional = true, features = ["v4_12"] }
 # Pure-Rust StatusNotifierItem tray (zbus, no libdbus): the "blocking" feature
 # gives a non-async API so the app needs no async runtime.
 ksni = { version = "0.3.6", default-features = false, features = ["blocking", "async-io"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "1.1"
+# "rustls-no-provider" rather than "rustls": the latter pulls in aws-lc-rs (a
+# C/cmake build that breaks the static musl artifact). The TLS config is built
+# in tempo.rs with the ring provider and webpki-roots and handed to reqwest
+# preconfigured, so the system cert store is never consulted.
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "query", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.1.8"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 # "v1" exposes the simple Entry API; the zbus store talks to the freedesktop
 # Secret Service without linking libdbus.
 keyring = { version = "4.2.0", default-features = false, features = ["v1", "zbus-secret-service-keyring-store"] }
 dirs = "7"
 clap = { version = "4.6.7", features = ["derive"] }
-rpassword = "7"
-thiserror = "2"
+rpassword = "7.5.4"
+thiserror = "2.0.21"

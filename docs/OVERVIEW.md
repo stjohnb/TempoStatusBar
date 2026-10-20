@@ -324,7 +324,7 @@ There are no hardcoded API hosts beyond the relative Jira and Tempo paths. See [
 
 Issue triage, PR labelling, and related repository maintenance are handled by the Claws automation service. See [claws-automation.md](claws-automation.md) for details on how Claws manages this repo.
 
-This repo's own Claws settings — job disables (`disabledJobs`) and runner enrollment (`runners`) — live in `claws.json` at the repo root, not on the automation host's config, so reconfiguring them is a PR here rather than a host edit (#227). Claws unions this file with the host config and ignores unknown keys, so adding a new key here ahead of Claws support for it is safe. A `claws.json` missing entirely from the default branch (not merely `enabled: false`) unmonitors the repo; never delete the file.
+This repo's own Claws settings — job disables (`disabledJobs`) and runner enrollment (`runners`) — live in `claws.json` at the repo root, not on the automation host's config, so reconfiguring them is a PR here rather than a host edit (#227). Claws unions this file with the host config and ignores unknown keys, so adding a new key here ahead of Claws support for it is safe. A `claws.json` missing entirely from the default branch (not merely `enabled: false`) unmonitors the repo; never delete the file. The same file declares the repo's dashboard avatar, `docs/avatar.svg` (hand-written SVG in the `DESIGN.md` palette: green status disc with a "3" on a dark tile, echoing the Linux tray icon); only the Claws dashboard uses it.
 
 ## CI/CD
 
