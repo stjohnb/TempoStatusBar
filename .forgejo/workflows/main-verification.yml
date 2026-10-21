@@ -166,7 +166,7 @@ jobs:
         echo "✅ Unit tests completed successfully"
 
     - name: Upload test results
-      uses: https://code.forgejo.org/forgejo/upload-artifact@v4
+      uses: https://code.forgejo.org/forgejo/upload-artifact@v5
       if: always()
       # Best-effort: org Actions storage quota exhaustion must not fail the
       # build (#177 — observed as "Artifact storage quota has been hit").
