@@ -31,7 +31,7 @@ env:
 jobs:
   build-and-test:
     name: Build and Test (Rust)
-    runs-on: [self-hosted, linux]
+    runs-on: [container, linux]
     # The first run pulls the Rust toolchain and GTK4 closures into the nix
     # store and compiles the gtk4-rs bindings from scratch.
     timeout-minutes: 45

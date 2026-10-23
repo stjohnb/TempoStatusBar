@@ -50,7 +50,7 @@ concurrency:
 jobs:
   bootstrap:
     name: Provision bucket + OIDC role
-    runs-on: [self-hosted, linux]
+    runs-on: [container, linux]
     timeout-minutes: 15
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_BOOTSTRAP_ACCESS_KEY_ID }}

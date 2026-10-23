@@ -87,8 +87,9 @@ if needed." See [ci-cd.md](ci-cd.md#key-design-decisions) for the fix.
 
 No workflow job should use a hosted runner (`ubuntu-latest`,
 `macos-latest`, etc.). CI now runs as Forgejo Actions in
-`.forgejo/workflows/`, on the same `[self-hosted, macos, tempo]` and
-`[self-hosted, linux]` labels.
+`.forgejo/workflows/`, on the org's self-hosted `[host, macos, tempo]` and
+`[container, linux]` runners (label scheme:
+[runner-labels.md](https://git.home.bstjohn.net/St-John-Software/fleet-infra/src/branch/main/docs/runner-labels.md)).
 
 **Why:** repeatedly asserted by the owner (#5, #16). macOS jobs moved to
 GitHub-hosted `macos-15` for a time (PR #126, after #121/#122's self-hosted

@@ -19,7 +19,7 @@ cover the full development lifecycle: `pr-verification.yml`,
 
 ### Common Settings (all workflows)
 
-- **Runners:** Self-hosted `[self-hosted, macos, tempo]` for build/test/quality jobs; `[self-hosted, linux]` for security scans, documentation checks, Linux CI/release, PR cleanup and the S3 bootstrap. The Mac Forgejo runner declares exactly those labels. The `tempo` label pins these jobs to the Mac that does **not** run the real TempoStatusBarApp: signing jobs put a temp keychain into the runner user's keychain search list, and on a Mac where the real app is polling, that triggers keychain-unlock dialogs in the user's session. Signing no longer changes the default keychain (#234), but the `tempo` pin stays as defence in depth. Machine-level documentation for the two shared Macs — inventory, runner-label semantics, registration and Xcode-install runbooks — is centralised in the nixos-config repo: [docs/macos-runners.md](https://git.home.bstjohn.net/St-John-Software/nixos-config/src/branch/main/docs/macos-runners.md).
+- **Runners:** Self-hosted `[host, macos, tempo]` for build/test/quality jobs; `[container, linux]` for security scans, documentation checks, Linux CI/release, PR cleanup and the S3 bootstrap. `host` and `container` are the two runner families (host-mode Macs vs. in-cluster Linux containers) and share no label; jobs never use `self-hosted` or `beefy`. The label families and how to choose labels are documented canonically in fleet-infra's [docs/runner-labels.md](https://git.home.bstjohn.net/St-John-Software/fleet-infra/src/branch/main/docs/runner-labels.md). The `tempo` label pins these jobs to the Mac that does **not** run the real TempoStatusBarApp: signing jobs put a temp keychain into the runner user's keychain search list, and on a Mac where the real app is polling, that triggers keychain-unlock dialogs in the user's session. Signing no longer changes the default keychain (#234), but the `tempo` pin stays as defence in depth. Machine-level documentation for the two shared Macs — inventory, runner-label semantics, registration and Xcode-install runbooks — is centralised in the nixos-config repo: [docs/macos-runners.md](https://git.home.bstjohn.net/St-John-Software/nixos-config/src/branch/main/docs/macos-runners.md).
 - **Xcode:** every macOS job starts with a shared `Select Xcode` step that finds the newest non-beta Xcode under `/Applications` and exports a **job-scoped `DEVELOPER_DIR`**. It deliberately does *not* use `maxim-lobanov/setup-xcode` or `xcode-select`: those change the machine-global active Xcode via `sudo`, and the two Macs are shared with namey and bonkus CI (which use the same step). No job may mutate machine-global state.
 - **Homebrew on the Mac:** the Forgejo host runner's `PATH` omits Homebrew, so Mac jobs that need `swiftlint` or `aws` run an "Expose Homebrew" step that appends `/opt/homebrew/bin` and `/usr/local/bin` to `$GITHUB_PATH` when they exist. Mac jobs never use nix — the flake targets Linux only — so JSON/HTTP work on the Mac uses the Xcode CLT `/usr/bin/python3`.
 - **Remote actions:** every `uses:` is a full URL pinned to a commit SHA — `https://github.com/actions/checkout@<sha>  # v7.0.1`, `https://github.com/aws-actions/configure-aws-credentials@<sha>  # v6.3.0` — plus `https://code.forgejo.org/forgejo/upload-artifact@v5` (upstream `actions/upload-artifact` v4+ does not work on Forgejo). `./.github/actions/setup-nix` is referenced by path.
@@ -63,7 +63,7 @@ Steps: Checkout + Xcode setup + Expose Homebrew + install SwiftLint (`command -v
 
 ### `security-scan`
 
-Runs on `[self-hosted, linux]`. Steps: Checkout + `setup-nix` + the Trivy pair described under [Trivy gating](#trivy-gating).
+Runs on `[container, linux]`. Steps: Checkout + `setup-nix` + the Trivy pair described under [Trivy gating](#trivy-gating).
 
 **Doc-only skip:** The workflow trigger uses `paths-ignore: ['docs/**', '**/*.md']`, so PRs that change only documentation files do not trigger the workflow at all — the build, lint, and scan jobs simply do not run. Branch protection on `main` must require the workflow name ("PR Verification") rather than individual job names; if individual job names are listed as required checks, doc-only PRs will be blocked in "Expected" state because those checks never report.
 
@@ -93,9 +93,9 @@ The step uses `continue-on-error: true` so a comment failure doesn't fail the bu
 
 | Job | Runner | Description |
 |---|---|---|
-| `main-build` | `[self-hosted, macos, tempo]` | Import signing cert → Release build + unit tests (real-keychain suite skipped, see below) + Archive + verify signature + DMG creation → clean up keychain |
-| `security-check` | `[self-hosted, linux]` | Trivy filesystem scan (see [Trivy gating](#trivy-gating)) |
-| `documentation-check` | `[self-hosted, linux]` | Verifies required docs exist (`README.md`, `CONTRIBUTING.md`) |
+| `main-build` | `[host, macos, tempo]` | Import signing cert → Release build + unit tests (real-keychain suite skipped, see below) + Archive + verify signature + DMG creation → clean up keychain |
+| `security-check` | `[container, linux]` | Trivy filesystem scan (see [Trivy gating](#trivy-gating)) |
+| `documentation-check` | `[container, linux]` | Verifies required docs exist (`README.md`, `CONTRIBUTING.md`) |
 
 ### Trivy gating
 
@@ -132,7 +132,7 @@ If the gate goes red, fix the dependency rather than loosening the gate.
 
 | Job | Runner | Description |
 |---|---|---|
-| `build-and-test` | `[self-hosted, linux]` | `cargo fmt --check` → `cargo clippy --all-targets -- -D warnings` → `cargo test` → `cargo build --release` |
+| `build-and-test` | `[container, linux]` | `cargo fmt --check` → `cargo clippy --all-targets -- -D warnings` → `cargo test` → `cargo build --release` |
 
 Every step runs through `nix $NIX_FLAGS develop ..# --command …` from the
 `linux/` working directory (`..#` selects the root flake). The toolchain is
@@ -168,7 +168,7 @@ than per PR, so the comment reports build status and points at
 
 | Job | Runner | Description |
 |---|---|---|
-| `release` | `[self-hosted, linux]` | Version gate → `nix build .#static` → static-linkage and version assertions → tarball + `.sha256` → Forgejo release `linux-vX.Y.Z` with both files attached as assets |
+| `release` | `[container, linux]` | Version gate → `nix build .#static` → static-linkage and version assertions → tarball + `.sha256` → Forgejo release `linux-vX.Y.Z` with both files attached as assets |
 
 Every run step executes inside the flake's `ci` devShell via a job-level
 `defaults.run.shell`, so `curl`/`jq` are available without wrapping each call.
@@ -246,9 +246,9 @@ to `edited` would make the job's own download-link PATCH re-run the build.
 
 | Job | Runner | Description |
 |---|---|---|
-| `release-build` | `[self-hosted, macos, tempo]` | Import signing cert → Release build + Archive (both with `MARKETING_VERSION=<tag>` override) + verify signature + DMG (named `TempoStatusBarApp-<version>.dmg`) → upload DMG to S3 + write download link into the release notes → clean up keychain |
-| `security-check` | `[self-hosted, linux]` | Trivy scan (see [Trivy gating](#trivy-gating)) |
-| `documentation-check` | `[self-hosted, linux]` | Docs presence check |
+| `release-build` | `[host, macos, tempo]` | Import signing cert → Release build + Archive (both with `MARKETING_VERSION=<tag>` override) + verify signature + DMG (named `TempoStatusBarApp-<version>.dmg`) → upload DMG to S3 + write download link into the release notes → clean up keychain |
+| `security-check` | `[container, linux]` | Trivy scan (see [Trivy gating](#trivy-gating)) |
+| `documentation-check` | `[container, linux]` | Docs presence check |
 
 The version comes from `github.event.release.tag_name` with the leading `v`
 stripped (falling back to `github.ref_name` on `workflow_dispatch`), not from
@@ -273,7 +273,7 @@ The first step of `release-build` asserts that `github.event.release.tag_name` e
 
 **Trigger:** `pull_request` with `types: [closed]` (fires on both merge and unmerged close)
 
-Runs on `[self-hosted, linux]` with `enable-openid-connect: true`. Checks out the repo, runs `setup-nix`, and executes every step inside the flake's `ci` devShell (`defaults.run.shell`), which supplies `aws` (`awscli2`) — there is no installer step. It assumes the OIDC role, then runs `aws s3 rm s3://<bucket>/pr/<N>/ --recursive` (with `|| true` so a missing prefix is non-fatal). Skipped for fork PRs — they never uploaded.
+Runs on `[container, linux]` with `enable-openid-connect: true`. Checks out the repo, runs `setup-nix`, and executes every step inside the flake's `ci` devShell (`defaults.run.shell`), which supplies `aws` (`awscli2`) — there is no installer step. It assumes the OIDC role, then runs `aws s3 rm s3://<bucket>/pr/<N>/ --recursive` (with `|| true` so a missing prefix is non-fatal). Skipped for fork PRs — they never uploaded.
 
 This workflow exists so per-PR DMG builds do not accumulate in the bucket indefinitely. As a backstop for cleanup runs that never fire, the bucket has a lifecycle rule (created by `s3-bootstrap.yml`) that expires `pr/`-prefixed objects after 30 days.
 
@@ -283,7 +283,7 @@ This workflow exists so per-PR DMG builds do not accumulate in the bucket indefi
 
 **Trigger:** `workflow_dispatch` only, with inputs `bucket` (default `tempo-statusbar-releases`), `region` (default `us-east-1`), and `role_name` (default `tempo-statusbar-github-actions` — the historical name, kept so the existing `AWS_ROLE_ARN` stays valid)
 
-One-time — but idempotent, safe to re-run — provisioning of the AWS resources the release/PR workflows depend on. Runs on `[self-hosted, linux]` inside the flake's `ci` devShell (for `aws`), using **temporary static credentials** read from the `AWS_BOOTSTRAP_ACCESS_KEY_ID` / `AWS_BOOTSTRAP_SECRET_ACCESS_KEY` Forgejo Actions secrets (it fails fast with a clear error if they are unset). It creates or updates:
+One-time — but idempotent, safe to re-run — provisioning of the AWS resources the release/PR workflows depend on. Runs on `[container, linux]` inside the flake's `ci` devShell (for `aws`), using **temporary static credentials** read from the `AWS_BOOTSTRAP_ACCESS_KEY_ID` / `AWS_BOOTSTRAP_SECRET_ACCESS_KEY` Forgejo Actions secrets (it fails fast with a clear error if they are unset). It creates or updates:
 
 1. The S3 bucket, with a public-access-block configuration that blocks ACLs but permits a bucket policy, and a bucket policy granting anonymous `s3:GetObject` on `releases/*` and `pr/*` only
 2. A lifecycle rule expiring `pr/`-prefixed objects after 30 days (backstop for missed PR-close cleanups)
@@ -310,7 +310,7 @@ SHA-pinned full-URL `uses:` entries and their `# vX.Y.Z` comments) and its
 `cargo` manager covers `linux/Cargo.toml`. Renovate PRs are ordinary same-repo
 PRs and go through the normal checks with the normal secrets. Cargo-only PRs
 touch `linux/**`, which `pr-verification.yml` `paths-ignore`s, so they run
-`linux-ci.yml` on `[self-hosted, linux]` and never occupy the shared Macs.
+`linux-ci.yml` on `[container, linux]` and never occupy the shared Macs.
 
 ---
 
@@ -381,6 +381,6 @@ The release and PR workflows additionally **notarize and staple** the DMG so Gat
 - **Signing verification in CI** — the "Verify code signature" step asserts both `Authority=Developer ID Application:` and the presence of the `runtime` flag in the signature. This catches accidental ad-hoc, self-signed, or unhardened builds before the DMG is packaged.
 - **`spctl --assess` over `stapler validate` alone** — the release workflow runs both. `stapler validate` confirms a ticket exists locally; `spctl --assess --type open --context context:primary-signature` is what Gatekeeper actually runs when a user opens the file from a quarantined download. Asserting both protects against the case where stapling appeared to succeed but the ticket doesn't satisfy Gatekeeper.
 - **Separate `linux-v*` tag namespace, release assets not S3** — the Linux tray app releases on its own `linux-vX.Y.Z` line so its cadence is not welded to the macOS `v1.3.x` line, and its tarball is attached to the Forgejo release rather than uploaded to S3. The DMG went to S3 because of its size and the macOS quarantine-origin problem (see above); neither applies to a ~10 MB tarball, and release assets are what the Claws snapshot job copies to the public GitHub mirror, which is the whole point of publishing it. The version is read from `linux/Cargo.toml` rather than from a tag the operator types, so the tag, the flake and the binary's `--version` cannot disagree — the workflow asserts all three. Because `release-tag.yml` triggers on `on: release` with no tag filter, and Forgejo fires that event for `linux-release.yml`'s API-created release, every one of its jobs needs a `!startsWith(github.event.release.tag_name, 'linux-v')` guard; adding a job there without one restarts the macOS sign+notarize path on Linux releases.
-- **Self-hosted runners — macOS and Linux** — build/test/quality jobs run on `[self-hosted, macos, tempo]`. The Linux-only jobs (Trivy scans, docs checks, Linux CI/release, PR cleanup, S3 bootstrap) run on `[self-hosted, linux]` and declare an explicit OS label so they are never scheduled onto a macOS runner.
+- **Self-hosted runners — macOS and Linux** — build/test/quality jobs run on `[host, macos, tempo]`. The Linux-only jobs (Trivy scans, docs checks, Linux CI/release, PR cleanup, S3 bootstrap) run on `[container, linux]` and select the `container` runner family explicitly, so they are never scheduled onto a host-mode runner such as a Mac.
 - **CI dependencies are repo-owned** — the self-hosted Linux runner baseline is `nix`/`git`/`docker` only; `curl`, `jq`, `aws` and every other CLI must come from `flake.nix`'s `ci` devShell. A bare tool missing from the runner dies with exit 127 (issue #218), and `|| true` guards turn that into a silent no-op rather than a visible failure. Prefer a job-level `defaults.run.shell` over per-call wrapping for jobs that only shell out to CLI tools; it leaves the scripts untouched. Never install with `sudo` — NixOS runners have none.
 - **Real-keychain test skip on CI (`TEMPO_SKIP_KEYCHAIN_TESTS`)** — `CredentialManagerHasStoredCredentialsTests` (see [OVERVIEW.md](OVERVIEW.md#testing)) exercises the real Keychain via `CredentialManager.shared`, including deleting the item under the production service name in `setUp`/`tearDown`. On the shared self-hosted Macs, the runner user's login keychain holds genuine credentials, and headless keychain access blocks on an authorization dialog instead of failing fast (observed as multi-minute test hangs, and once an actual password prompt on the runner's screen). `pr-verification.yml` and `main-verification.yml` set `TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS: "1"` on the "Run unit tests" step; `xcodebuild` only forwards environment variables prefixed `TEST_RUNNER_` into the test-host process (stripping the prefix), so the test suite sees plain `TEMPO_SKIP_KEYCHAIN_TESTS=1`. The gate lives in `setUpWithError` (via `XCTSkipIf`) rather than `setUp`, because it must run before any keychain access is attempted. Locally, without the env var, the suite runs unskipped against the real Keychain as before. The same flag also short-circuits `WorklogStateManager.init()` (a private `isKeychainAccessDisabled` check), skipping `setupTimer()`, `setupNetworkMonitor()`, and `checkCredentialsAndRefresh()` — otherwise `AppDelegate`'s `WorklogStateManager.shared` would read the real login keychain under the production service name from the ad-hoc-signed test host app launching in the runner's GUI session, which could prompt for access (#234).

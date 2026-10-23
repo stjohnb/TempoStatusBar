@@ -332,7 +332,7 @@ Seven Forgejo Actions workflows in `.forgejo/workflows/` — see [ci-cd.md](ci-c
 
 | Workflow | Trigger | Key jobs |
 |---|---|---|
-| `linux-ci.yml` | PRs/pushes touching `linux/**`, `flake.nix`, `flake.lock` | `cargo fmt --check`, clippy, test, release build — all via `nix develop` on `[self-hosted, linux]` |
+| `linux-ci.yml` | PRs/pushes touching `linux/**`, `flake.nix`, `flake.lock` | `cargo fmt --check`, clippy, test, release build — all via `nix develop` on `[container, linux]` |
 | `linux-release.yml` | Push to `main` touching `linux/**`, `flake.nix`, `flake.lock`, manual | Version-gated: builds `.#static` (musl), asserts static linkage + `--version` match, tags `linux-vX.Y.Z`, publishes tarball + `.sha256` as Forgejo release assets via the API |
 | `pr-verification.yml` | PRs to `main` | Build+test (with signing), SwiftLint, Trivy scan, DMG upload to `s3://…/pr/<N>/`, PR comment |
 | `pr-cleanup.yml` | PR `closed` | Deletes the PR's `pr/<N>/` prefix from S3 |
@@ -344,7 +344,7 @@ Main-branch build failures are not handled by a workflow in this repo: Claws' ce
 
 Dependency updates come from the Forgejo-side Renovate run configured in `St-John-Software/fleet-infra` (Dependabot is gone): its `github-actions` manager covers `.forgejo/workflows/` and its `cargo` manager covers `linux/Cargo.toml` — see [ci-cd.md](ci-cd.md#dependency-updates--renovate). Trivy runs in PR, main and release workflows and fails the job only on CRITICAL findings with a fix available.
 
-All macOS jobs start with a shared `Select Xcode` step that resolves the newest installed Xcode on the runner and exports a job-scoped `DEVELOPER_DIR` (no `sudo`, no machine-global `xcode-select` — the two Macs are shared with namey and bonkus CI). PR and main workflows use `cancel-in-progress: true`; the release workflow uses `cancel-in-progress: false`. Build/test/quality jobs run on `[self-hosted, macos, tempo]`; Linux jobs (security scans, docs checks, Linux CI/release, PR cleanup, S3 bootstrap) run on `[self-hosted, linux]`. Changes are batched and the number of PRs is kept low to reduce queue wait times.
+All macOS jobs start with a shared `Select Xcode` step that resolves the newest installed Xcode on the runner and exports a job-scoped `DEVELOPER_DIR` (no `sudo`, no machine-global `xcode-select` — the two Macs are shared with namey and bonkus CI). PR and main workflows use `cancel-in-progress: true`; the release workflow uses `cancel-in-progress: false`. Build/test/quality jobs run on `[host, macos, tempo]`; Linux jobs (security scans, docs checks, Linux CI/release, PR cleanup, S3 bootstrap) run on `[container, linux]`. Changes are batched and the number of PRs is kept low to reduce queue wait times.
 
 All build jobs sign the `.app` bundle using a Developer ID Application certificate stored as Forgejo Actions secrets (`SIGNING_CERT_P12_BASE64`, `SIGNING_CERT_PASSWORD`, `KEYCHAIN_PASSWORD`). The certificate is imported into a temporary keychain at build time and verified with `codesign --verify --deep --strict` before DMG packaging. See [ci-cd.md](ci-cd.md#code-signing) for full details.
 

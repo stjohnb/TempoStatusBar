@@ -43,10 +43,11 @@ Tempo API changes and `docs/ci-cd.md` for workflow changes.
 - CI: the canonical repo is on Forgejo and workflows live in
   `.forgejo/workflows/`; flag any `.github/workflows/` files (deleted; only
   `.github/actions/setup-nix` remains) and any `gh` use in CI (Forgejo API
-  calls use `curl`). macOS jobs run on `[self-hosted, macos, tempo]`; Linux
-  jobs run on `[self-hosted, linux]`. Reject `macos-latest`, `macos-15`,
+  calls use `curl`). macOS jobs run on `[host, macos, tempo]`; Linux
+  jobs run on `[container, linux]`. Reject `macos-latest`, `macos-15`,
   `ubuntu-latest`, `ubuntu-22.04`, `windows-latest`, and bare
-  `runs-on: self-hosted`. The two Macs are shared with bonkus/namey CI — flag
+  `runs-on: self-hosted`; Forgejo jobs never use `self-hosted` or `beefy`
+  (label scheme: https://git.home.bstjohn.net/St-John-Software/fleet-infra/src/branch/main/docs/runner-labels.md). The two Macs are shared with bonkus/namey CI — flag
   changes that needlessly multiply PRs or re-trigger the macOS jobs.
 - Tests must use the DI mocks (`CredentialManagerProtocol`,
   `TempoServiceProtocol`, `MockURLProtocol`) and live in

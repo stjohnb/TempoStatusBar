@@ -44,9 +44,10 @@ planning-contract: concise-requirements-v1
 - For CI workflow changes: the canonical repo is on Forgejo and workflows live
   in `.forgejo/workflows/`; CI never uses `gh` (Forgejo API calls use `curl`),
   and the Linux tarball is a Forgejo release asset that Claws mirrors to the
-  public GitHub repo. macOS jobs run on `[self-hosted, macos, tempo]`,
+  public GitHub repo. macOS jobs run on `[host, macos, tempo]`,
   which is two physical Macs shared with bonkus and namey CI. Linux jobs run
-  on `[self-hosted, linux]`. A plan must never use `sudo`, machine-global
+  on `[container, linux]` (label scheme:
+  https://git.home.bstjohn.net/St-John-Software/fleet-infra/src/branch/main/docs/runner-labels.md). A plan must never use `sudo`, machine-global
   `xcode-select`, or `maxim-lobanov/setup-xcode`—these change the Mac for
   every other repo's CI. Xcode is selected via the existing `Select Xcode`
   step, which exports job-scoped `DEVELOPER_DIR`. Batch related workflow work

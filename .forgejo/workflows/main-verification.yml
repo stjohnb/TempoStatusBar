@@ -21,7 +21,7 @@ concurrency:
 jobs:
   main-build:
     name: Main Build
-    runs-on: [self-hosted, macos, tempo]
+    runs-on: [host, macos, tempo]
     # Only two Macs serve three repos — a wedged job must not hold one for hours.
     timeout-minutes: 30
 
@@ -276,7 +276,7 @@ jobs:
 
   security-check:
     name: Security Check
-    runs-on: [self-hosted, linux]
+    runs-on: [container, linux]
     
     steps:
     - name: Checkout code
@@ -327,7 +327,7 @@ jobs:
 
   documentation-check:
     name: Documentation Check
-    runs-on: [self-hosted, linux]
+    runs-on: [container, linux]
     
     steps:
     - name: Checkout code

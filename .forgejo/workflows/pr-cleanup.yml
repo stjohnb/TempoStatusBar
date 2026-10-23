@@ -17,7 +17,7 @@ jobs:
     name: Delete PR Builds from S3
     # Fork PRs never uploaded (no OIDC access), so nothing to clean up.
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux]
+    runs-on: [container, linux]
     timeout-minutes: 15
     # Forgejo mints an OIDC ID token only when this is set on the job.
     enable-openid-connect: true

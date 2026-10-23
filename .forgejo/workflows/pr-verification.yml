@@ -23,7 +23,7 @@ concurrency:
 jobs:
   build-and-test:
     name: Build and Test
-    runs-on: [self-hosted, macos, tempo]
+    runs-on: [host, macos, tempo]
     # Only two Macs serve three repos — a wedged job must not hold one for hours.
     timeout-minutes: 60
     # Forgejo mints an OIDC ID token only when this is set on the job (or
@@ -493,7 +493,7 @@ jobs:
 
   code-quality:
     name: Code Quality
-    runs-on: [self-hosted, macos, tempo]
+    runs-on: [host, macos, tempo]
     # Only two Macs serve three repos — a wedged job must not hold one for hours.
     timeout-minutes: 15
 
@@ -561,7 +561,7 @@ jobs:
 
   security-scan:
     name: Security Scan
-    runs-on: [self-hosted, linux]
+    runs-on: [container, linux]
     
     steps:
     - name: Checkout code

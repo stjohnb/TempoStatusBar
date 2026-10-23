@@ -25,7 +25,7 @@ env:
 jobs:
   release:
     name: Build and Publish Static Binary
-    runs-on: [self-hosted, linux]
+    runs-on: [container, linux]
     # The first pkgsStatic build compiles a musl stdenv closure from source.
     timeout-minutes: 90
     env:

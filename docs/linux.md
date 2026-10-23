@@ -270,7 +270,7 @@ readelf -l ./result/bin/tempo-statusbar | grep -c INTERP   # expect 0
 `TrayService` or a `keyring::Entry`, and nothing executes a `token_command`,
 because CI has no D-Bus session.
 
-CI runs everything through `nix develop` on `[self-hosted, linux]` — see
+CI runs everything through `nix develop` on `[container, linux]` — see
 `.forgejo/workflows/linux-ci.yml` (Forgejo is the canonical repo; CI does not
 use `gh`). Every tool comes from the repo's own devShell; nothing is installed
 on the runner.

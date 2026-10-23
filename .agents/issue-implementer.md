@@ -31,8 +31,9 @@ You are implementing approved plans for **TempoStatusBarApp**. Read
 - `appVersion` is generated; do not check in `AppVersion.swift`.
 - **Forgejo Actions runners:** the canonical repo is on Forgejo and workflows
   live in `.forgejo/workflows/` (`.github/workflows/` no longer exists; don't
-  recreate it). macOS jobs run on `[self-hosted, macos, tempo]` (shared with
-  bonkus/namey CI); Linux jobs run on `[self-hosted, linux]`. CI does not use
+  recreate it). macOS jobs run on `[host, macos, tempo]` (shared with
+  bonkus/namey CI); Linux jobs run on `[container, linux]` (label scheme:
+  https://git.home.bstjohn.net/St-John-Software/fleet-infra/src/branch/main/docs/runner-labels.md). CI does not use
   `gh` — Forgejo API calls use `curl`.
   Minimise PRs and don't re-trigger builds with trivial follow-up commits —
   the two shared Macs are a limited pool.

@@ -19,7 +19,7 @@ concurrency:
 jobs:
   release-build:
     name: Release Build
-    runs-on: [self-hosted, macos, tempo]
+    runs-on: [host, macos, tempo]
     # `on: release` has no tag filter, so a `linux-v*` release cut by
     # linux-release.yml would otherwise start a full macOS sign+notarize build
     # and derive a nonsense MARKETING_VERSION ("linux-0.1.0"). The two release
@@ -387,7 +387,7 @@ jobs:
 
   security-check:
     name: Security Check
-    runs-on: [self-hosted, linux]
+    runs-on: [container, linux]
     # See the guard on release-build: `linux-v*` releases are the Linux app's
     # own line and are verified by linux-release.yml.
     if: ${{ !startsWith(github.event.release.tag_name, 'linux-v') }}
@@ -441,7 +441,7 @@ jobs:
 
   documentation-check:
     name: Documentation Check
-    runs-on: [self-hosted, linux]
+    runs-on: [container, linux]
     # See the guard on release-build.
     if: ${{ !startsWith(github.event.release.tag_name, 'linux-v') }}
 
