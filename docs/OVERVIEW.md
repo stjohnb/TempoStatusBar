@@ -6,6 +6,7 @@
 | [OVERVIEW.md](OVERVIEW.md) | Starting any task in this repo | Entry point |
 | [api-design.md](api-design.md) | Working on Tempo/Jira API calls, endpoints, auth, or user-identifier resolution | Reference |
 | [ci-cd.md](ci-cd.md) | Changing a Forgejo Actions workflow, code signing/notarization, or release/S3 automation | Reference |
+| [observability.md](observability.md) | Checking what the apps log, that they emit no telemetry, and what a new timer or external call must add | Reference |
 | [linux.md](linux.md) | Working on the Linux tray crate (`linux/`) — architecture, config/credential resolution, releases | Reference |
 | [DESIGN.md](DESIGN.md) | Touching the Linux GTK4 windows' visual design (colour, type, motion) | Deep dive |
 | [agent-notes.md](agent-notes.md) | Debugging a host/CI/Claws operational gotcha | Reference |

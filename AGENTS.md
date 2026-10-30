@@ -6,7 +6,7 @@ TempoStatusBar is primarily a macOS menu bar app that polls Jira Tempo Server/Da
 
 - Start with [docs/PRODUCT.md](docs/PRODUCT.md) for what the product must do and why.
 - Then [docs/OVERVIEW.md](docs/OVERVIEW.md) for the doc map, architecture, key patterns, configuration, and links to subsystem docs.
-- For Tempo API work, read [docs/api-design.md](docs/api-design.md). For workflow or release changes, read [docs/ci-cd.md](docs/ci-cd.md). For Linux-specific work, read [docs/linux.md](docs/linux.md).
+- For Tempo API work, read [docs/api-design.md](docs/api-design.md). For workflow or release changes, read [docs/ci-cd.md](docs/ci-cd.md). For Linux-specific work, read [docs/linux.md](docs/linux.md). For logging or diagnostics changes, read [docs/observability.md](docs/observability.md).
 
 ## Key Conventions
 
