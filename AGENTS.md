@@ -17,6 +17,12 @@ TempoStatusBar is primarily a macOS menu bar app that polls Jira Tempo Server/Da
 - `docs/claws-automation.md` is maintained automatically; do not edit or move it.
 - All changes land via pull request; nothing is pushed directly to the default branch. See [docs/claws-automation.md](docs/claws-automation.md) for the full convention.
 
+## Observability
+
+- This repo emits no runtime telemetry. Logging is local only: `os.Logger` on macOS, stderr on Linux.
+- Never log credentials.
+- Before adding a timer, poll loop or external call, read [docs/observability.md](docs/observability.md) and follow its "What every change adds" rules.
+
 ## Automation Host Policy
 
 Claws agents work on a shared, resource-constrained automation host that also runs the
