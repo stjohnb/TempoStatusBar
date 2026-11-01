@@ -328,6 +328,9 @@ fn poll_loop(
     let mut backoff = BACKOFF_START;
     loop {
         let cycle = poll_once(client, config_path);
+        if let Some(line) = state::poll_failure_log_line(&cycle.status) {
+            eprintln!("{line}");
+        }
         let status = cycle.status.clone();
         if handle.update(move |tray| tray.status = status).is_none() {
             // Tray service shut down underneath us.

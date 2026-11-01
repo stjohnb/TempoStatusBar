@@ -250,6 +250,32 @@ final class WorklogStateManagerTests: XCTestCase {
         XCTAssertEqual(stateManager.lastError, .tempo(.unauthorized))
     }
 
+    func testLoadTempoData_ForbiddenError() async {
+        mockCredentialManager.mockCredentials = CredentialManager.Credentials(
+            apiToken: "test-token", accountId: "test-account",
+            jiraURL: "https://test.atlassian.net", warningThreshold: 7)
+        mockTempoService.mockError = TempoError.forbidden
+        stateManager.hasCredentials = true
+
+        await stateManager.loadTempoData()
+
+        XCTAssertFalse(stateManager.isLoading)
+        XCTAssertEqual(stateManager.lastError, .tempo(.forbidden))
+    }
+
+    func testLoadTempoData_ApiError_DoesNotRetry() async {
+        mockCredentialManager.mockCredentials = CredentialManager.Credentials(
+            apiToken: "test-token", accountId: "test-account",
+            jiraURL: "https://test.atlassian.net", warningThreshold: 7)
+        mockTempoService.mockError = TempoError.apiError(statusCode: 500)
+        stateManager.hasCredentials = true
+
+        await stateManager.loadTempoData()
+
+        XCTAssertFalse(stateManager.isLoading)
+        XCTAssertEqual(stateManager.lastError, .tempo(.apiError(statusCode: 500)))
+    }
+
     func testLoadTempoData_NetworkError() async {
         // Given
         let credentials = CredentialManager.Credentials(

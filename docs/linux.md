@@ -85,6 +85,9 @@ becomes a gray tray state with a hint — never a panic. Since 0.2.0 that error
 blocks the Jira URL as well as the token, but it stays non-fatal: the tray shows
 the error and retries at the next poll interval rather than exiting.
 
+Every poll that ends in an error state (not only keyring errors) also writes one
+`tempo-statusbar: poll failed: …` line to stderr.
+
 ### The credentials blob
 
 `tempo-statusbar set-credentials` stores one JSON object under service

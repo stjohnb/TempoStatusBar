@@ -126,9 +126,11 @@ class WorklogStateManager: ObservableObject {
     private func setupTimer() {
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
             Task { @MainActor in
+                self.logger.debug("Hourly Tempo refresh timer fired")
                 await self.loadTempoData()
             }
         }
+        logger.debug("Scheduled hourly Tempo refresh timer (3600 s)")
     }
 
     func clearData() {
@@ -177,6 +179,11 @@ class WorklogStateManager: ObservableObject {
 
         } catch {
             isLoading = false
+            if error is TempoError || error is CredentialError {
+                logger.error("loadTempoData failed: \(error.localizedDescription, privacy: .public)")
+            } else {
+                logger.error("loadTempoData failed: \(error.localizedDescription)")
+            }
             if let credentialError = error as? CredentialError {
                 lastErrorWasNetworkError = false
                 hasCredentials = false
@@ -413,7 +420,12 @@ class TempoService: TempoServiceProtocol {
             let (data, response) = try await URLSession.shared.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
+                logger.error("non-HTTP response at \(path, privacy: .public)")
                 throw TempoError.networkError
+            }
+
+            if httpResponse.statusCode != 200 {
+                logger.error("HTTP \(httpResponse.statusCode, privacy: .public) at \(path, privacy: .public)")
             }
 
             if httpResponse.statusCode == 401 {

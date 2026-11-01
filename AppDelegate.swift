@@ -165,6 +165,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         updateCheckTimer = Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { _ in
             Task { @MainActor in await self.runAutomaticUpdateCheck() }
         }
+        logger.debug("Scheduled daily update-check timer (86400 s)")
     }
 
     @objc private func checkForUpdatesManually() {
@@ -172,6 +173,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func runAutomaticUpdateCheck() async {
+        logger.debug("Automatic update check started")
         await performUpdateCheck(showUpToDateAlert: false, respectSkippedVersion: true)
     }
 

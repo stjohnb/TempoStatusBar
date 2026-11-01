@@ -128,9 +128,36 @@ fn plural(days: i64) -> &'static str {
     }
 }
 
+/// stderr line for a failed poll cycle. `Status::Error` never contains a token
+/// or `token_command` output. `NoCredentials`/`NoData` are not failures.
+pub fn poll_failure_log_line(status: &Status) -> Option<String> {
+    match status {
+        Status::Error(msg) => Some(format!("tempo-statusbar: poll failed: {msg}")),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn poll_failure_line_for_error() {
+        assert_eq!(
+            poll_failure_log_line(&Status::Error("boom".to_string())),
+            Some("tempo-statusbar: poll failed: boom".to_string())
+        );
+    }
+
+    #[test]
+    fn poll_failure_line_none_for_no_credentials() {
+        assert_eq!(poll_failure_log_line(&Status::NoCredentials), None);
+    }
+
+    #[test]
+    fn poll_failure_line_none_for_no_data() {
+        assert_eq!(poll_failure_log_line(&Status::NoData), None);
+    }
 
     #[test]
     fn severity_boundaries_match_the_macos_app() {
