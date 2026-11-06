@@ -102,3 +102,14 @@ and intended state for every job.
 **Supersedes:** PR #126's move of macOS build/test/quality jobs to
 GitHub-hosted `macos-15`, and PR #122's "sticking with GitHub-hosted
 runners" decision.
+
+### No leftover GitHub credentials, runners or workflows after the Forgejo cutover
+
+This repo must not retain GitHub PATs, GHCR pull credentials, or dead
+`.github/workflows` now that Forgejo is canonical. The `.github/actions/setup-nix`
+composite action is still in use and stays. Docs must not describe GitHub runners,
+GHCR pulls or push mirrors as current.
+
+**Why:** the owner swept every GitHub PAT on their account (2026-10-14) and found
+almost none needed; leftovers block revoking PATs and keep dead code paths and
+wrong docs around.
