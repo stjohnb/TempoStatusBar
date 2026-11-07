@@ -36,3 +36,7 @@ Claws service itself. When working on this repo as an agent:
   add it to `flake.nix` in the same PR.
 - **Never kill a process or free a port you do not own.** `lsof -ti:PORT | xargs kill` and
   `pkill -f node` will take down the Claws service, whose dashboard listens on port 3000.
+
+## Security
+
+The security policy is in [docs/security.md](docs/security.md). Never commit or log credentials.
