@@ -6,10 +6,16 @@
   # once a stable release ships it.
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  outputs = { self, nixpkgs }:
+  # Darwin shells use the 26.05 stable branch: nixos-unstable (26.11) dropped
+  # x86_64-darwin, which one of the shared Macs still is.
+  inputs.nixpkgs-darwin.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
+
+  outputs = { self, nixpkgs, nixpkgs-darwin }:
     let
-      # Linux only: the macOS app is the Swift/Xcode target and does not use nix.
+      # Linux systems for the static/GTK builds; the macOS app itself is the Swift/Xcode target.
+      # `darwinSystems` below only provides the macOS CI dev shell.
       systems = [ "x86_64-linux" "aarch64-linux" ];
+      darwinSystems = [ "aarch64-darwin" "x86_64-darwin" ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
       # Single source of truth for the version: linux/Cargo.toml. The release
       # workflow reads it back out with `nix eval .#static.version`, so the tag,
@@ -76,9 +82,28 @@
         security = pkgs.mkShell {
           packages = [ pkgs.trivy ];
         };
-      });
+      })
+      # Darwin-only shell for interactive use (CI uses `macos-tools`): SwiftLint and the
+      # AWS CLI, pinned by flake.lock instead of an unpinned `brew install`.
+      # mkShellNoCC keeps the cc-stdenv Apple SDK hooks from overriding the
+      # job's DEVELOPER_DIR, which SwiftLint's SourceKit relies on.
+      // nixpkgs.lib.genAttrs darwinSystems (system:
+        let pkgs = nixpkgs-darwin.legacyPackages.${system}; in {
+          macos = pkgs.mkShellNoCC { packages = [ pkgs.swiftlint pkgs.awscli2 ]; };
+        });
 
-      packages = forAllSystems (pkgs: {
+      # Tools for the `[host, macos, tempo]` jobs, run with `nix shell`, not
+      # `nix develop`: develop fetches bashInteractive from the flake's
+      # `nixpkgs` input (unstable, no x86_64-darwin) and falls back to macOS's
+      # bash 3.2, which cannot parse the stdenv setup script.
+      packages = nixpkgs.lib.genAttrs darwinSystems (system:
+        let pkgs = nixpkgs-darwin.legacyPackages.${system}; in {
+          macos-tools = pkgs.symlinkJoin {
+            name = "macos-ci-tools";
+            paths = [ pkgs.swiftlint pkgs.awscli2 ];
+          };
+        })
+      // forAllSystems (pkgs: {
         # `default` is what St-John-Software/nixos-config builds from the public
         # mirror — keep the attribute name.
         default = mkTempoStatusBar { inherit pkgs; rustPlatform = pkgs.rustPlatform; gui = true; };

@@ -34,7 +34,7 @@ TempoStatusBarAppTests/        XCTest unit tests (mocked)
 linux/                         Linux tray app (Rust) — see "Linux App" below
 flake.nix                      Nix dev shell + package for the Linux app
 .forgejo/workflows/            CI/CD (PR, main, release, Linux) — Forgejo Actions
-.github/actions/               Composite actions (setup-nix), used by .forgejo/workflows/
+.github/actions/               Composite actions (setup-nix, trivy-scan), used by .forgejo/workflows/
 README.md                      Private-repo README (setup/config instructions)
 README.public.md               Source for the public repo's README — see "Public Snapshot" below
 ```
@@ -344,7 +344,7 @@ Seven Forgejo Actions workflows in `.forgejo/workflows/` — see [ci-cd.md](ci-c
 
 Main-branch build failures are not handled by a workflow in this repo: Claws' central `main-build-monitor` job watches every `push`/`schedule` run of these workflows on `main`, retries once when the failure looks transient, files a `Build failure: <workflow>` issue here otherwise, and closes it with a comment once a later run of the same workflow succeeds — see [ci-cd.md](ci-cd.md#main-branch-failure-monitoring).
 
-Dependency updates come from the Forgejo-side Renovate run configured in `St-John-Software/fleet-infra` (Dependabot is gone): its `github-actions` manager covers `.forgejo/workflows/` and its `cargo` manager covers `linux/Cargo.toml` — see [ci-cd.md](ci-cd.md#dependency-updates--renovate). Trivy runs in PR, main and release workflows and fails the job only on CRITICAL findings with a fix available.
+Dependency updates come from the Forgejo-side Renovate run configured in `St-John-Software/fleet-infra` (Dependabot is gone): its `github-actions` manager covers `.forgejo/workflows/` and its `cargo` manager covers `linux/Cargo.toml`, and the repo's `renovate.json` enables the `nix` manager for `flake.lock` — see [ci-cd.md](ci-cd.md#dependency-updates--renovate). Trivy runs in the PR, main, release, Linux CI and Linux release workflows and fails the job only on CRITICAL findings with a fix available.
 
 All macOS jobs start with a shared `Select Xcode` step that resolves the newest installed Xcode on the runner and exports a job-scoped `DEVELOPER_DIR` (no `sudo`, no machine-global `xcode-select` — the two Macs are shared with namey and bonkus CI). PR and main workflows use `cancel-in-progress: true`; the release workflow uses `cancel-in-progress: false`. Build/test/quality jobs run on `[host, macos, tempo]`; Linux jobs (security scans, docs checks, Linux CI/release, PR cleanup, S3 bootstrap) run on `[container, linux]`. Changes are batched and the number of PRs is kept low to reduce queue wait times.
 

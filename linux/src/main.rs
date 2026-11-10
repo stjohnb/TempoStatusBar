@@ -496,6 +496,10 @@ fn set_credentials() -> ExitCode {
         }
     };
     if !jira_url.is_empty() {
+        if !jira_url.trim().starts_with("https://") {
+            eprintln!("The Jira URL must start with https://; nothing was stored.");
+            return ExitCode::FAILURE;
+        }
         creds.jira_url = jira_url;
     } else if creds.jira_url.trim().is_empty() {
         eprintln!("No Jira URL entered; nothing was stored.");

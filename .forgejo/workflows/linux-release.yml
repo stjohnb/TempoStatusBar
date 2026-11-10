@@ -8,6 +8,8 @@ on:
       - 'flake.nix'
       - 'flake.lock'
       - '.forgejo/workflows/linux-release.yml'
+      - '.github/actions/setup-nix/**'
+      - '.github/actions/trivy-scan/**'
   # Dispatch on main to re-run after a runner outage. If linux-vX.Y.Z already
   # exists, the gate step logs a notice and the run is a green no-op.
   workflow_dispatch:
@@ -26,6 +28,7 @@ jobs:
   release:
     name: Build and Publish Static Binary
     runs-on: [container, linux]
+    needs: security-check
     # The first pkgsStatic build compiles a musl stdenv closure from source.
     timeout-minutes: 90
     env:
@@ -225,3 +228,21 @@ jobs:
           "$API_URL/repos/$REPO/releases/$RELEASE_ID" > /dev/null
         trap - ERR
         echo "Published $TAG with $DIR.tar.gz and its .sha256"
+
+  security-check:
+    name: Security Scan
+    runs-on: [container, linux]
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+    - name: Checkout code
+      uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+    - name: Set up Nix
+      uses: ./.github/actions/setup-nix
+
+    - name: Trivy scan
+      uses: ./.github/actions/trivy-scan

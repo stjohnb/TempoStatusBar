@@ -21,8 +21,8 @@ cover the full development lifecycle: `pr-verification.yml`,
 
 - **Runners:** Self-hosted `[host, macos, tempo]` for build/test/quality jobs; `[container, linux]` for security scans, documentation checks, Linux CI/release, PR cleanup and the S3 bootstrap. `host` and `container` are the two runner families (host-mode Macs vs. in-cluster Linux containers) and share no label; jobs never use `self-hosted` or `beefy`. The label families and how to choose labels are documented canonically in fleet-infra's [docs/runner-labels.md](https://git.home.bstjohn.net/St-John-Software/fleet-infra/src/branch/main/docs/runner-labels.md). The `tempo` label pins these jobs to the Mac that does **not** run the real TempoStatusBarApp: signing jobs put a temp keychain into the runner user's keychain search list, and on a Mac where the real app is polling, that triggers keychain-unlock dialogs in the user's session. Signing no longer changes the default keychain (#234), but the `tempo` pin stays as defence in depth. Machine-level documentation for the two shared Macs — inventory, runner-label semantics, registration and Xcode-install runbooks — is centralised in the nixos-config repo: [docs/macos-runners.md](https://git.home.bstjohn.net/St-John-Software/nixos-config/src/branch/main/docs/macos-runners.md).
 - **Xcode:** every macOS job starts with a shared `Select Xcode` step that finds the newest non-beta Xcode under `/Applications` and exports a **job-scoped `DEVELOPER_DIR`**. It deliberately does *not* use `maxim-lobanov/setup-xcode` or `xcode-select`: those change the machine-global active Xcode via `sudo`, and the two Macs are shared with namey and bonkus CI (which use the same step). No job may mutate machine-global state.
-- **Homebrew on the Mac:** the Forgejo host runner's `PATH` omits Homebrew, so Mac jobs that need `swiftlint` or `aws` run an "Expose Homebrew" step that appends `/opt/homebrew/bin` and `/usr/local/bin` to `$GITHUB_PATH` when they exist. Mac jobs never use nix — the flake targets Linux only — so JSON/HTTP work on the Mac uses the Xcode CLT `/usr/bin/python3`.
-- **Remote actions:** every `uses:` is a full URL pinned to a commit SHA — `https://github.com/actions/checkout@<sha>  # v7.0.1`, `https://github.com/aws-actions/configure-aws-credentials@<sha>  # v6.3.0` — plus `https://code.forgejo.org/forgejo/upload-artifact@v5` (upstream `actions/upload-artifact` v4+ does not work on Forgejo). `./.github/actions/setup-nix` is referenced by path.
+- **Nix on the Mac:** `swiftlint` and `aws` come from the flake's darwin-only `macos-tools` package (a `symlinkJoin`, pinned by `flake.lock`; built from the `nixpkgs-darwin` input on `nixpkgs-26.05-darwin` because nixos-unstable dropped x86_64-darwin and one shared Mac is Intel), run per command as `nix shell "$GITHUB_WORKSPACE#macos-tools" --command …` after `setup-nix` (not `nix develop`, which falls back to macOS bash 3.2 because the flake's `nixpkgs` input has no x86_64-darwin). `xcodebuild` and signing stay outside nix, and the package carries no cc-stdenv hooks so it never overrides the job's `DEVELOPER_DIR`. Other JSON/HTTP work on the Mac uses the Xcode CLT `/usr/bin/python3`.
+- **Remote actions:** every `uses:` is a full URL pinned to a commit SHA — `https://github.com/actions/checkout@<sha>  # v7.0.1`, `https://github.com/aws-actions/configure-aws-credentials@<sha>  # v6.3.0` — plus `https://code.forgejo.org/forgejo/upload-artifact@<sha>  # v5` (upstream `actions/upload-artifact` v4+ does not work on Forgejo). `./.github/actions/setup-nix` is referenced by path.
 - **No `gh` in CI:** release creation, tag checks, release-body edits and PR comments call the Forgejo API (`${{ github.api_url }}`) with `curl` and `${{ github.token }}`. On Linux, `curl`/`jq` come from the flake `ci` devShell; on the Mac, `/usr/bin/python3` does the work. Forgejo's PR comment endpoint is `/issues/{index}/comments`, so commenting jobs hold `issues: write` as well as `pull-requests: write`.
 - **Concurrency:** PR and main workflows use `cancel-in-progress: true` to cancel redundant runs; the release workflow uses `cancel-in-progress: false` to avoid interrupting in-flight release builds
 - **DMG storage — S3 via OIDC (#177):** built DMGs are stored in the `tempo-statusbar-releases` S3 bucket (job env `S3_BUCKET`/`S3_REGION`/`DOWNLOAD_BASE`), not as release assets. Jobs authenticate with Forgejo's OIDC issuer (`https://www.bstjohn.net/forgejo-oidc`): Forgejo only mints an ID token for a job that sets `enable-openid-connect: true`, so each S3 job carries that plus `permissions: id-token: write`, then `aws-actions/configure-aws-credentials` (SHA-pinned) assumes the IAM role in the `AWS_ROLE_ARN` secret; no static AWS credentials are stored. Fork PRs skip all AWS steps (Forgejo fork PRs get no secrets or OIDC token). Stable releases land at `releases/TempoStatusBarApp-<version>.dmg` (plus a `TempoStatusBarApp-latest.dmg` copy); PR builds at `pr/<N>/TempoStatusBarApp-<version>.dmg`. Both prefixes are public-read over HTTPS. One-time provisioning is handled by [`s3-bootstrap.yml`](#s3-bootstrapyml--s3-bootstrap) (see below).
@@ -31,7 +31,7 @@ cover the full development lifecycle: `pr-verification.yml`,
 
 ## `pr-verification.yml` — PR Verification
 
-**Trigger:** `pull_request` targeting `main` (`paths-ignore`: `docs/**`, `**/*.md`, `linux/**`, `flake.nix`, `flake.lock`)
+**Trigger:** `pull_request` targeting `main` (`paths-ignore`: `docs/**`, `**/*.md`, `linux/**`)
 
 **Jobs:**
 
@@ -40,18 +40,18 @@ cover the full development lifecycle: `pr-verification.yml`,
 Permissions: `contents: read`, `pull-requests: write`, `issues: write`, `id-token: write`; `enable-openid-connect: true`
 
 Steps:
-1. Checkout + Expose Homebrew + Xcode setup
+1. Checkout + `setup-nix` + Xcode setup
 2. Generate version string: `<latest-tag>-pr-<PR number>-<short SHA>` (stored as step output `steps.version.outputs.version`)
 3. **Import signing certificate** (see [Code Signing](#code-signing) below)
 4. Debug build (`xcodebuild … -configuration Debug`)
 5. Release build (`xcodebuild … -configuration Release`)
-6. Unit tests via `./run_tests.sh`, with `TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS: "1"` set on the step (see [Key Design Decisions](#key-design-decisions)) — uploads `test-results.xcresult` as an artifact via `forgejo/upload-artifact@v5` (3-day retention, `continue-on-error: true` in both PR and main workflows so an artifact-store failure cannot fail the build)
+6. Unit tests via `./run_tests.sh`, with `TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS: "1"` set on the step (see [Key Design Decisions](#key-design-decisions)) — uploads `test-results.xcresult` as an artifact via `forgejo/upload-artifact` (SHA-pinned, v5) (3-day retention, `continue-on-error: true` in both PR and main workflows so an artifact-store failure cannot fail the build)
 7. Archive (`xcodebuild … archive -archivePath ./build/TempoStatusBarApp.xcarchive`)
 8. Verify `.app` bundle structure
 9. **Verify code signature** — confirms `Authority=Developer ID Application:` is present
 10. Create DMG with `hdiutil create`
 11. **Sign and notarize DMG** (skipped on fork PRs) — sign the DMG with the Developer ID identity, submit via `xcrun notarytool`, staple, and re-verify with `spctl --assess`
-12. **Upload DMG to S3** (skipped on fork PRs) — `command -v aws || brew install awscli`, assume the OIDC role via `aws-actions/configure-aws-credentials`, then `aws s3 cp` to `s3://<bucket>/pr/<N>/TempoStatusBarApp-<version>.dmg`
+12. **Upload DMG to S3** (skipped on fork PRs) — assume the OIDC role via `aws-actions/configure-aws-credentials`, then `aws s3 cp` (through the `#macos-tools` package) to `s3://<bucket>/pr/<N>/TempoStatusBarApp-<version>.dmg`
 13. **Post or update PR comment** with the S3 download link (see below)
 14. **Clean up signing keychain + notarization key** (post-run step)
 
@@ -59,7 +59,7 @@ Steps:
 
 Permissions: default (`contents: read`)
 
-Steps: Checkout + Xcode setup + Expose Homebrew + install SwiftLint (`command -v swiftlint || brew install swiftlint` — self-hosted runners keep it installed between runs, so this only installs on a cold runner; a bare `brew install` would otherwise try to upgrade an existing copy and fail where the Homebrew prefix isn't user-writable) + `swiftlint lint --reporter github-actions-logging`
+Steps: Checkout + `setup-nix` + Xcode setup + `swiftlint lint --reporter github-actions-logging` run via `nix shell` on the flake `macos-tools` package (with the job's `DEVELOPER_DIR` passed through)
 
 ### `security-scan`
 
@@ -100,8 +100,8 @@ The step uses `continue-on-error: true` so a comment failure doesn't fail the bu
 ### Trivy gating
 
 There is no code-scanning upload on Forgejo, so the GitHub SARIF upload is
-gone. `pr-verification.yml`, `main-verification.yml` and `release-tag.yml`
-each run the same pair inside the flake's `security` devShell:
+gone. `pr-verification.yml`, `main-verification.yml`, `release-tag.yml`,
+`linux-ci.yml` and `linux-release.yml` each run the same pair inside the flake's `security` devShell:
 
 1. `trivy fs --scanners vuln --severity HIGH,CRITICAL --format table .` —
    prints HIGH and CRITICAL findings to the job log, never fails.
@@ -133,6 +133,7 @@ If the gate goes red, fix the dependency rather than loosening the gate.
 | Job | Runner | Description |
 |---|---|---|
 | `build-and-test` | `[container, linux]` | `cargo fmt --check` → `cargo clippy --all-targets -- -D warnings` → `cargo test` → `cargo build --release` |
+| `security-scan` | `[container, linux]` | Trivy scan from the repo root (see [Trivy gating](#trivy-gating)) |
 
 Every step runs through `nix $NIX_FLAGS develop ..# --command …` from the
 `linux/` working directory (`..#` selects the root flake). The toolchain is
@@ -142,9 +143,10 @@ fails loudly if there is none; it is copied verbatim from `St-John-Software/claw
 the org reference implementation. `timeout-minutes: 45` covers the first run,
 which pulls the Rust toolchain closure into the nix store.
 
-`pr-verification.yml` and `main-verification.yml` list `linux/**`, `flake.nix`
-and `flake.lock` in `paths-ignore` so Rust-only changes never occupy the shared
-Macs. `paths-ignore` only skips when *every* changed file matches, so a mixed
+`main-verification.yml` lists `linux/**`, `flake.nix` and `flake.lock` in
+`paths-ignore`, and `pr-verification.yml` lists `linux/**` only (the flake files
+pin the Mac CI tools), so Rust-only changes never occupy the shared Macs; the
+Trivy scan for them runs in `security-scan` above. `paths-ignore` only skips when *every* changed file matches, so a mixed
 Swift + Rust change still runs the macOS jobs.
 
 On `pull_request` runs against a same-repo branch, a final step posts (or
@@ -307,7 +309,7 @@ Forgejo-side Renovate run configured in `St-John-Software/fleet-infra`
 (`apps/renovate/configmap.yaml`, whose `repositories` list includes this repo).
 Its `github-actions` manager covers `.forgejo/workflows/` (including the
 SHA-pinned full-URL `uses:` entries and their `# vX.Y.Z` comments) and its
-`cargo` manager covers `linux/Cargo.toml`. Renovate PRs are ordinary same-repo
+`cargo` manager covers `linux/Cargo.toml`. The repo's `renovate.json` enables the `nix` manager so `flake.lock` is refreshed too. Renovate PRs are ordinary same-repo
 PRs and go through the normal checks with the normal secrets. Cargo-only PRs
 touch `linux/**`, which `pr-verification.yml` `paths-ignore`s, so they run
 `linux-ci.yml` on `[container, linux]` and never occupy the shared Macs.
@@ -371,8 +373,8 @@ The release and PR workflows additionally **notarize and staple** the DMG so Gat
 - **DMG naming** — PR builds: `TempoStatusBarApp-pr-<N>-<sha>`; release builds: `TempoStatusBarApp-<version>`.
 - **Artifact retention** — `test-results` (xcresult) artifacts: 3 days for both PRs and main. PR build DMGs live under `s3://<bucket>/pr/<N>/` and are deleted when the PR closes (`pr-cleanup.yml`; 30-day lifecycle backstop). Tagged-release DMGs live under `s3://<bucket>/releases/` and do not expire. Forgejo runners have caches off and no org storage quota, so there is no storage-cleanup workflow.
 - **Fork PRs** — the signing, S3 upload and PR comment steps are skipped for forks (Forgejo fork PRs get no secrets and no OIDC token). Fork contributors who need to test their build should either rebase onto the upstream repo or build locally with Xcode.
-- **SwiftLint** — installed at CI runtime via `brew` (after the Expose Homebrew step); configuration in `.swiftlint.yml`.
-- **Trivy** — comes from the repo's `flake.nix` `security` devShell, not a runtime download, so its version is pinned by `flake.lock` alongside the rest of the toolchain; bumping Trivy means bumping nixpkgs in `flake.lock` (issue #237, replacing `aquasecurity/trivy-action@master`, whose runtime download from GitHub releases had failed Main Verification). No Actions caching is used — the "Download Trivy vulnerability DB" step re-fetches the DB when the local cache is stale (run 104 showed `Need to update DB`). The DB fallback chain and the blanked `GITHUB_*` variables live in the workflow steps. See [Trivy gating](#trivy-gating) for what fails the job.
+- **SwiftLint** — comes from the flake `macos-tools` package (run with `nix shell`) (pinned by `flake.lock`); configuration in `.swiftlint.yml`.
+- **Trivy** — comes from the repo's `flake.nix` `security` devShell, not a runtime download, so its version is pinned by `flake.lock` alongside the rest of the toolchain; bumping Trivy means bumping nixpkgs in `flake.lock` (issue #237, replacing `aquasecurity/trivy-action@master`, whose runtime download from GitHub releases had failed Main Verification). No Actions caching is used — the "Download Trivy vulnerability DB" step re-fetches the DB when the local cache is stale (run 104 showed `Need to update DB`). The DB fallback chain and the blanked `GITHUB_*` variables live in `.github/actions/trivy-scan/action.yml`. See [Trivy gating](#trivy-gating) for what fails the job.
 - **SHA pinning for remote actions** — every remote `uses:` is a full `https://…@<sha>  # vX.Y.Z` URL, not a tag or moving ref. Actions that mint cloud credentials or write to public distribution points carry higher supply-chain risk if compromised. Renovate bumps both the SHA and the trailing comment together, so the pin does not silently go stale. When updating a pin manually, resolve the tag to its commit SHA on the action's upstream repo before committing.
 - **PR comment body construction** — the Mac comment is built in a `/usr/bin/python3` heredoc (`<<'PY'`, so the shell does not expand anything inside) and the Linux comment in a bash heredoc passed through `jq --arg`, so neither has to fight YAML block-scalar indentation. The download URL is constructed deterministically from the PR number and version string — no artifact lookup is needed.
 - **`MARKETING_VERSION` CLI override** — Release and PR `xcodebuild` invocations pass `MARKETING_VERSION=<tag-version>` on the command line. This overrides the value hardcoded in `project.pbxproj` and ensures `appVersion`, `CFBundleShortVersionString`, and the About alert all report the release tag (e.g. `1.3.0`), not the stale project-file value (#105).

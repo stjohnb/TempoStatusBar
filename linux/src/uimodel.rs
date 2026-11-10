@@ -36,8 +36,8 @@ pub fn validate(
     if jira_url.is_empty() {
         return Err("A Jira URL is required.".to_string());
     }
-    if !(jira_url.starts_with("http://") || jira_url.starts_with("https://")) {
-        return Err("The Jira URL must start with http:// or https://.".to_string());
+    if !jira_url.starts_with("https://") {
+        return Err("The Jira URL must start with https://.".to_string());
     }
     if !(1..=365).contains(&form.warning_threshold) {
         return Err("Warning threshold must be between 1 and 365 days.".to_string());
@@ -142,20 +142,24 @@ mod tests {
     }
 
     #[test]
-    fn validate_requires_an_http_scheme() {
+    fn validate_requires_https() {
         let bare = SettingsForm {
             jira_url: "jira.example.com".to_string(),
             ..form()
         };
         assert_eq!(
             validate(&bare, &stored()).unwrap_err(),
-            "The Jira URL must start with http:// or https://."
+            "The Jira URL must start with https://."
         );
         let plain = SettingsForm {
             jira_url: "http://jira.example.com".to_string(),
             ..form()
         };
-        assert!(validate(&plain, &stored()).is_ok());
+        assert_eq!(
+            validate(&plain, &stored()).unwrap_err(),
+            "The Jira URL must start with https://."
+        );
+        assert!(validate(&form(), &stored()).is_ok());
     }
 
     #[test]

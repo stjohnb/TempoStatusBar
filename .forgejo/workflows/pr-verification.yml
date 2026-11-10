@@ -4,14 +4,13 @@ on:
   pull_request:
     branches: [ main ]
     # paths-ignore only skips when *every* changed file matches, so a mixed
-    # Swift + Rust PR still runs the macOS jobs.
+    # Swift + Rust PR still runs the macOS jobs. flake.nix/flake.lock are not
+    # ignored: they pin the SwiftLint and AWS CLI the Mac jobs run (#macos-tools package).
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
       # The Linux tray app is built by linux-ci.yml; keep it off the shared Macs.
       - 'linux/**'
-      - 'flake.nix'
-      - 'flake.lock'
 
 permissions:
   contents: read
@@ -50,11 +49,8 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Expose Homebrew
-      # The Forgejo host runner's PATH omits Homebrew, so `aws` (and in
-      # code-quality, `swiftlint`) would not be found without this.
-      run: |
-        for d in /opt/homebrew/bin /usr/local/bin; do if [ -d "$d" ]; then echo "$d" >> "$GITHUB_PATH"; fi; done
+    - name: Set up Nix
+      uses: ./.github/actions/setup-nix
 
     - name: Prevent idle sleep
       # macOS idle sleep tracks user input, not CPU load, so a busy job can't
@@ -223,7 +219,7 @@ jobs:
         echo "✅ Unit tests completed successfully"
 
     - name: Upload test results
-      uses: https://code.forgejo.org/forgejo/upload-artifact@v5
+      uses: https://code.forgejo.org/forgejo/upload-artifact@cb8afe72b42edc798abfb8fcb556cf660d894245  # v5
       if: always()
       # Best-effort: org Actions storage quota exhaustion must not fail the
       # build (#177 — observed as "Artifact storage quota has been hit").
@@ -368,14 +364,6 @@ jobs:
         # Final Gatekeeper assessment as an end-user would experience it
         spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
 
-    - name: Ensure AWS CLI
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-      run: |
-        # Self-hosted runners keep the CLI installed between runs; a bare
-        # `brew install` would try to upgrade an existing copy (see the
-        # SwiftLint pattern below).
-        command -v aws >/dev/null 2>&1 || brew install awscli
-
     - name: Configure AWS credentials
       # Fork PRs have no OIDC access to the role — same guard as sign/notarize.
       if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
@@ -389,7 +377,9 @@ jobs:
       run: |
         set -euo pipefail
         DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
-        aws s3 cp "$DMG" "s3://$S3_BUCKET/pr/${{ github.event.pull_request.number }}/$DMG" \
+        NIX_FLAGS="--extra-experimental-features nix-command --extra-experimental-features flakes"
+        nix $NIX_FLAGS shell "$GITHUB_WORKSPACE#macos-tools" --command \
+          aws s3 cp "$DMG" "s3://$S3_BUCKET/pr/${{ github.event.pull_request.number }}/$DMG" \
           --content-type application/x-apple-diskimage
 
     - name: Comment PR with build artifact link
@@ -538,21 +528,14 @@ jobs:
         echo "DEVELOPER_DIR=$newest/Contents/Developer" >> "$GITHUB_ENV"
         DEVELOPER_DIR="$newest/Contents/Developer" xcodebuild -version
 
-    - name: Expose Homebrew
-      # The Forgejo host runner's PATH omits Homebrew; swiftlint lives there.
-      run: |
-        for d in /opt/homebrew/bin /usr/local/bin; do if [ -d "$d" ]; then echo "$d" >> "$GITHUB_PATH"; fi; done
-
-    - name: Install SwiftLint
-      run: |
-        # Self-hosted runners keep SwiftLint installed between runs; only install
-        # when missing. A bare `brew install` would try to upgrade an existing
-        # copy and fail on runners where the Homebrew prefix isn't user-writable.
-        command -v swiftlint || brew install swiftlint
+    - name: Set up Nix
+      uses: ./.github/actions/setup-nix
 
     - name: Run SwiftLint
       run: |
-        swiftlint lint --reporter github-actions-logging
+        NIX_FLAGS="--extra-experimental-features nix-command --extra-experimental-features flakes"
+        nix $NIX_FLAGS shell "$GITHUB_WORKSPACE#macos-tools" --command \
+          env DEVELOPER_DIR="$DEVELOPER_DIR" swiftlint lint --reporter github-actions-logging
 
     - name: Release idle-sleep assertion
       if: always()
@@ -570,42 +553,5 @@ jobs:
     - name: Set up Nix
       uses: ./.github/actions/setup-nix
 
-    - name: Download Trivy vulnerability DB
-      # The Forgejo runner exports GITHUB_TOKEN/GITHUB_ACTOR; Trivy's keychain
-      # presents them to ghcr.io, which answers "DENIED: denied" and kills the
-      # fallback DB download (issue #clw_01M5A80N3B56SC6Q7ATS3MS3SK). Blank both.
-      env:
-        GITHUB_TOKEN: ""
-        GITHUB_ACTOR: ""
-      run: |
-        set -euo pipefail
-        NIX_FLAGS="--extra-experimental-features nix-command --extra-experimental-features flakes"
-        DB_REPOS="--db-repository mirror.gcr.io/aquasec/trivy-db:2 --db-repository ghcr.io/aquasecurity/trivy-db:2 --db-repository public.ecr.aws/aquasecurity/trivy-db:2"
-        backoff=(20 40 60 90)
-        attempt=0
-        until nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#security" --command \
-            trivy fs --download-db-only --no-progress $DB_REPOS .; do
-          if [ "$attempt" -ge "${#backoff[@]}" ]; then
-            echo "::error::Trivy vulnerability DB could not be downloaded after $((attempt + 1)) attempts; the scan did NOT run (scan-infrastructure failure, not a vulnerability finding)"
-            exit 1
-          fi
-          echo "::warning::Trivy DB download failed (attempt $((attempt + 1))); retrying in ${backoff[$attempt]}s"
-          sleep "${backoff[$attempt]}"
-          attempt=$((attempt + 1))
-        done
-        echo "Trivy vulnerability DB downloaded; running scan"
-
-    - name: Run Trivy vulnerability scanner
-      # No code-scanning upload on Forgejo: HIGH+CRITICAL findings are printed
-      # as a table for the log, and only CRITICAL findings with a fix
-      # available fail the job. If this goes red, fix the dependency rather
-      # than loosening the gate.
-      env:
-        GITHUB_TOKEN: ""
-        GITHUB_ACTOR: ""
-      run: |
-        NIX_FLAGS="--extra-experimental-features nix-command --extra-experimental-features flakes"
-        nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#security" --command \
-          trivy fs --skip-db-update --scanners vuln --severity HIGH,CRITICAL --format table .
-        nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#security" --command \
-          trivy fs --skip-db-update --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 .
+    - name: Trivy scan
+      uses: ./.github/actions/trivy-scan

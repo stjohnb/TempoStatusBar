@@ -22,6 +22,8 @@ pub enum TempoError {
     MissingCredentials,
     #[error("Invalid Jira URL")]
     InvalidUrl,
+    #[error("The Jira URL must use https://")]
+    InsecureUrl,
     #[error("Unauthorized - check your API token")]
     Unauthorized,
     #[error("Forbidden - check your account permissions")]
@@ -139,6 +141,8 @@ impl TempoClient {
         let http = reqwest::blocking::Client::builder()
             .tls_backend_preconfigured(tls_config()?)
             .timeout(REQUEST_TIMEOUT)
+            // Never send the token over cleartext, even via a redirect.
+            .https_only(true)
             .build()
             .map_err(|_| TempoError::NetworkError)?;
         Ok(Self { http })
@@ -191,6 +195,9 @@ impl TempoClient {
         let base = jira_url.trim().trim_end_matches('/');
         let url =
             reqwest::Url::parse(&format!("{base}/{path}")).map_err(|_| TempoError::InvalidUrl)?;
+        if url.scheme() != "https" {
+            return Err(TempoError::InsecureUrl);
+        }
 
         let response = self
             .http
@@ -220,6 +227,17 @@ mod tests {
 
     fn date(year: i32, month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).expect("valid date")
+    }
+
+    #[test]
+    fn rejects_a_plain_http_jira_url() {
+        let client = TempoClient::new().expect("client");
+        assert_eq!(
+            client
+                .fetch_user_info("t", "http://jira.example.com")
+                .unwrap_err(),
+            TempoError::InsecureUrl
+        );
     }
 
     /// A rustls version mismatch with reqwest makes `build()` reject the

@@ -9,7 +9,7 @@ The repo ships a macOS menu bar app as a signed, notarized DMG (release and PR b
 
 ### Dependency and image vulnerabilities
 
-`trivy fs` scans the repo (run from the flake `security` devShell) in `pr-verification.yml`, `main-verification.yml` and `release-tag.yml`. The job logs HIGH and CRITICAL findings and fails on fixable CRITICAL findings. Renovate (configured in fleet-infra) opens dependency update PRs. The repo publishes no container image, so the image scan gate does not apply.
+`trivy fs` scans the repo (run from the flake `security` devShell) in `pr-verification.yml`, `main-verification.yml`, `release-tag.yml`, `linux-ci.yml` and `linux-release.yml` (the Linux release waits for its scan), so Rust-only changes are scanned too. The job logs HIGH and CRITICAL findings and fails on fixable CRITICAL findings. Renovate (configured in fleet-infra) opens dependency update PRs. The repo publishes no container image, so the image scan gate does not apply.
 
 ### Accepted findings
 
@@ -25,17 +25,13 @@ None. No container image is published and no finding has been accepted. A new ac
 
 ### Supply chain
 
-`linux/Cargo.lock` and `flake.lock` are committed. Remote actions are pinned to commit SHAs except the one listed under Known gaps. Renovate (fleet-infra) updates GitHub Actions pins and cargo dependencies. The macOS app has no third-party packages. Rule for new changes: pin new dependencies through a lockfile and new CI actions to a full commit SHA.
+`linux/Cargo.lock` and `flake.lock` are committed. All remote actions are pinned to commit SHAs. SwiftLint and the AWS CLI on the shared Macs come from the flake's darwin-only `macos-tools` package (run with `nix shell`) (the `nixpkgs-darwin` input on `nixpkgs-26.05-darwin`, kept for the Intel Mac), pinned by `flake.lock`, not from `brew install`. Renovate (fleet-infra) updates GitHub Actions pins and cargo dependencies, and its nix manager (enabled in the repo's `renovate.json`) maintains `flake.lock`. The macOS app has no third-party packages. Rule for new changes: pin new dependencies through a lockfile and new CI actions to a full commit SHA.
 
 ### Exposure and authentication
 
-Nothing is reachable from the network: no listener, no ingress and no network policy apply to this repo. Outbound Jira/Tempo calls authenticate with a Bearer token. Downloads are protected by Developer ID signing and notarization on macOS and by a `.sha256` file for the Linux tarball.
+Nothing is reachable from the network: no listener, no ingress and no network policy apply to this repo. Outbound Jira/Tempo calls authenticate with a Bearer token. The Linux app refuses non-`https://` Jira URLs in the settings form, in `set-credentials` and in the HTTP client itself (which also rejects redirects to http), so the token is never sent in cleartext; macOS App Transport Security enforces the same. Downloads are protected by Developer ID signing and notarization on macOS and by a `.sha256` file for the Linux tarball.
 
 ### Known gaps
 
-- `https://code.forgejo.org/forgejo/upload-artifact@v5` is pinned to a tag, not a commit SHA, in `pr-verification.yml` and `main-verification.yml`.
-- `pr-verification.yml` and `release-tag.yml` install `awscli`, and `pr-verification.yml` installs `swiftlint`, with unpinned `brew install` on the shared Macs, outside any lockfile.
-- Renovate does not refresh `flake.lock`; its last update came from the Dependabot era (#216). Only `linux/Cargo.lock` gets lock-file maintenance.
-- Rust-only changes (`linux/**`, `flake.nix`, `flake.lock`) skip every Trivy scan: the macOS workflows `paths-ignore` them and `linux-ci.yml` / `linux-release.yml` run no Trivy.
-- The Linux app accepts an `http://` Jira URL (`linux/src/uimodel.rs`), so the API token can be sent in cleartext. On macOS, App Transport Security blocks this.
 - Accepted: no container image is published, so the Trivy fs gate fails only on fixable CRITICAL findings, not HIGH; the contract's High/Critical block applies to image pushes.
+- nixpkgs 26.05-darwin gets security fixes only until the end of 2026, and no later nixpkgs supports x86_64-darwin: retire the Intel Mac runner or move the `nixpkgs-darwin` input by then.

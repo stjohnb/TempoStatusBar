@@ -190,7 +190,7 @@ them are hidden rather than shown empty. With no credentials it offers an
 The **settings window** mirrors `SettingsView`: Jira URL, API token, account ID
 with an **Auto-detect** button, and the warning threshold, plus **Test
 Connection**, **Save**, and a separated **Clear Stored Credentials** behind a
-confirmation. Save writes the same Secret Service blob `set-credentials` writes,
+confirmation. The Jira URL must be `https://`: the settings form, `set-credentials` and the HTTP client all reject plain `http://` so the token is never sent in cleartext (a stored `http://` URL gets a clear error). Save writes the same Secret Service blob `set-credentials` writes,
 then triggers an immediate refresh.
 
 Window sizes are independent of the macOS popovers: `gui.rs` currently uses

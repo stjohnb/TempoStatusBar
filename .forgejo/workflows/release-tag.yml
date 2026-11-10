@@ -102,6 +102,9 @@ jobs:
         echo "DEVELOPER_DIR=$newest/Contents/Developer" >> "$GITHUB_ENV"
         DEVELOPER_DIR="$newest/Contents/Developer" xcodebuild -version
 
+    - name: Set up Nix
+      uses: ./.github/actions/setup-nix
+
     - name: Extract version from tag
       id: version
       env:
@@ -296,19 +299,6 @@ jobs:
         # Final Gatekeeper assessment as an end-user would experience it
         spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
 
-    - name: Expose Homebrew
-      # The Forgejo host runner's PATH omits Homebrew, where `aws` lives.
-      run: |
-        for d in /opt/homebrew/bin /usr/local/bin; do if [ -d "$d" ]; then echo "$d" >> "$GITHUB_PATH"; fi; done
-
-    - name: Ensure AWS CLI
-      if: github.event_name == 'release'
-      run: |
-        # Self-hosted runners keep the CLI installed between runs; a bare
-        # `brew install` would try to upgrade an existing copy (see SwiftLint
-        # pattern in pr-verification.yml).
-        command -v aws >/dev/null 2>&1 || brew install awscli
-
     - name: Configure AWS credentials
       if: github.event_name == 'release'
       uses: https://github.com/aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd  # v6.3.0
@@ -321,9 +311,12 @@ jobs:
       run: |
         set -euo pipefail
         DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
-        aws s3 cp "$DMG" "s3://$S3_BUCKET/releases/$DMG" \
+        NIX_FLAGS="--extra-experimental-features nix-command --extra-experimental-features flakes"
+        nix $NIX_FLAGS shell "$GITHUB_WORKSPACE#macos-tools" --command \
+          aws s3 cp "$DMG" "s3://$S3_BUCKET/releases/$DMG" \
           --content-type application/x-apple-diskimage
-        aws s3 cp "$DMG" "s3://$S3_BUCKET/releases/TempoStatusBarApp-latest.dmg" \
+        nix $NIX_FLAGS shell "$GITHUB_WORKSPACE#macos-tools" --command \
+          aws s3 cp "$DMG" "s3://$S3_BUCKET/releases/TempoStatusBarApp-latest.dmg" \
           --content-type application/x-apple-diskimage
         echo "Uploaded to $DOWNLOAD_BASE/releases/$DMG"
 
@@ -399,45 +392,8 @@ jobs:
     - name: Set up Nix
       uses: ./.github/actions/setup-nix
 
-    - name: Download Trivy vulnerability DB
-      # The Forgejo runner exports GITHUB_TOKEN/GITHUB_ACTOR; Trivy's keychain
-      # presents them to ghcr.io, which answers "DENIED: denied" and kills the
-      # fallback DB download (issue #clw_01M5A80N3B56SC6Q7ATS3MS3SK). Blank both.
-      env:
-        GITHUB_TOKEN: ""
-        GITHUB_ACTOR: ""
-      run: |
-        set -euo pipefail
-        NIX_FLAGS="--extra-experimental-features nix-command --extra-experimental-features flakes"
-        DB_REPOS="--db-repository mirror.gcr.io/aquasec/trivy-db:2 --db-repository ghcr.io/aquasecurity/trivy-db:2 --db-repository public.ecr.aws/aquasecurity/trivy-db:2"
-        backoff=(20 40 60 90)
-        attempt=0
-        until nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#security" --command \
-            trivy fs --download-db-only --no-progress $DB_REPOS .; do
-          if [ "$attempt" -ge "${#backoff[@]}" ]; then
-            echo "::error::Trivy vulnerability DB could not be downloaded after $((attempt + 1)) attempts; the scan did NOT run (scan-infrastructure failure, not a vulnerability finding)"
-            exit 1
-          fi
-          echo "::warning::Trivy DB download failed (attempt $((attempt + 1))); retrying in ${backoff[$attempt]}s"
-          sleep "${backoff[$attempt]}"
-          attempt=$((attempt + 1))
-        done
-        echo "Trivy vulnerability DB downloaded; running scan"
-
-    - name: Run Trivy vulnerability scanner
-      # No code-scanning upload on Forgejo: HIGH+CRITICAL findings are printed
-      # as a table for the log, and only CRITICAL findings with a fix
-      # available fail the job. If this goes red, fix the dependency rather
-      # than loosening the gate.
-      env:
-        GITHUB_TOKEN: ""
-        GITHUB_ACTOR: ""
-      run: |
-        NIX_FLAGS="--extra-experimental-features nix-command --extra-experimental-features flakes"
-        nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#security" --command \
-          trivy fs --skip-db-update --scanners vuln --severity HIGH,CRITICAL --format table .
-        nix $NIX_FLAGS develop "$GITHUB_WORKSPACE#security" --command \
-          trivy fs --skip-db-update --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 .
+    - name: Trivy scan
+      uses: ./.github/actions/trivy-scan
 
   documentation-check:
     name: Documentation Check
