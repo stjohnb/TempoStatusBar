@@ -7,7 +7,7 @@
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   # Darwin shells use the 26.05 stable branch: nixos-unstable (26.11) dropped
-  # x86_64-darwin, which one of the shared Macs still is.
+  # x86_64-darwin, which both shared Macs still are.
   inputs.nixpkgs-darwin.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
 
   outputs = { self, nixpkgs, nixpkgs-darwin }:

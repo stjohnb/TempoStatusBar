@@ -25,7 +25,7 @@ None. No container image is published and no finding has been accepted. A new ac
 
 ### Supply chain
 
-`linux/Cargo.lock` and `flake.lock` are committed. All remote actions are pinned to commit SHAs. SwiftLint and the AWS CLI on the shared Macs come from the flake's darwin-only `macos-tools` package (run with `nix shell`) (the `nixpkgs-darwin` input on `nixpkgs-26.05-darwin`, kept for the Intel Mac), pinned by `flake.lock`, not from `brew install`. Renovate (fleet-infra) updates GitHub Actions pins and cargo dependencies, and its nix manager (enabled in the repo's `renovate.json`) maintains `flake.lock`. The macOS app has no third-party packages. Rule for new changes: pin new dependencies through a lockfile and new CI actions to a full commit SHA.
+`linux/Cargo.lock` and `flake.lock` are committed. All remote actions are pinned to commit SHAs. SwiftLint and the AWS CLI on the shared Macs come from the flake's darwin-only `macos-tools` package (run with `nix shell`) (the `nixpkgs-darwin` input on `nixpkgs-26.05-darwin`, kept because the Mac runner is Intel), pinned by `flake.lock`, not from `brew install`. Renovate (fleet-infra) updates GitHub Actions pins and cargo dependencies, and its nix manager (enabled in the repo's `renovate.json`) maintains `flake.lock`. The macOS app has no third-party packages. Rule for new changes: pin new dependencies through a lockfile and new CI actions to a full commit SHA.
 
 ### Exposure and authentication
 
@@ -34,4 +34,4 @@ Nothing is reachable from the network: no listener, no ingress and no network po
 ### Known gaps
 
 - Accepted: no container image is published, so the Trivy fs gate fails only on fixable CRITICAL findings, not HIGH; the contract's High/Critical block applies to image pushes.
-- nixpkgs 26.05-darwin gets security fixes only until the end of 2026, and no later nixpkgs supports x86_64-darwin: retire the Intel Mac runner or move the `nixpkgs-darwin` input by then.
+- Accepted: the only runner for this repo's Mac jobs (`[host, macos, tempo]`, one Intel MacBook Pro) is x86_64-darwin, and nixpkgs 26.05 is the last release that supports it, so SwiftLint and the AWS CLI there (`macos-tools`, from the `nixpkgs-darwin` input on `nixpkgs-26.05-darwin`) get no security fixes after the end of 2026. Both tools only read this repo's checkout and upload to the repo's own S3 bucket with short-lived OIDC credentials, on a LAN-only single-tenant forge. Move `nixpkgs-darwin` to a current branch when the runner is replaced by an Apple-silicon Mac.
