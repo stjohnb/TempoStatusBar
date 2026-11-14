@@ -323,9 +323,10 @@ ever move into the default dependency set. `linux-ci.yml` builds
 
 The tag namespace `linux-v*` is deliberately separate from the macOS `v1.3.x`
 line, so the two release cadences are not welded together. `release-tag.yml`
-(the macOS sign+notarize workflow) has no tag filter of its own, so all three
-of its jobs carry a `!startsWith(github.event.release.tag_name, 'linux-v')`
-guard. The guard is load-bearing: Forgejo fires `release: published` when
+(the macOS sign+notarize workflow) has no tag filter of its own, so every
+one of its jobs carries a `linux-v` guard (`!startsWith(github.event.release.tag_name, 'linux-v')`,
+and on the dispatched Mac build `!startsWith(inputs.tag, 'linux-v')`). The
+guard is load-bearing: Forgejo fires `release: published` when
 `linux-release.yml` publishes its release through the API.
 
 There is no S3 upload — unlike the macOS DMG, the Linux tarball lives on the

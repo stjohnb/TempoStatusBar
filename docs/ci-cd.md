@@ -10,22 +10,22 @@ Product requirements: [product/distribution.md](product/distribution.md)
 ## Workflow Files
 
 The canonical repo is `git.home.bstjohn.net/St-John-Software/TempoStatusBar`
-on Forgejo, and all workflows live in `.forgejo/workflows/`. Seven workflows
+on Forgejo, and all workflows live in `.forgejo/workflows/`. Six workflows
 cover the full development lifecycle: `pr-verification.yml`,
 `main-verification.yml`, `linux-ci.yml`, `linux-release.yml`,
-`release-tag.yml`, `pr-cleanup.yml` and `s3-bootstrap.yml`.
+`release-tag.yml` and `pr-cleanup.yml`.
 
 `.github/` holds only the `setup-nix` composite action, which Forgejo workflows reference by path.
 
 ### Common Settings (all workflows)
 
-- **Runners:** Self-hosted `[host, macos, tempo]` for build/test/quality jobs; `[container, linux]` for security scans, documentation checks, Linux CI/release, PR cleanup and the S3 bootstrap. `host` and `container` are the two runner families (host-mode Macs vs. in-cluster Linux containers) and share no label; jobs never use `self-hosted` or `beefy`. The label families and how to choose labels are documented canonically in fleet-infra's [docs/runner-labels.md](https://git.home.bstjohn.net/St-John-Software/fleet-infra/src/branch/main/docs/runner-labels.md). The `tempo` label pins these jobs to the Mac that does **not** run the real TempoStatusBarApp: signing jobs put a temp keychain into the runner user's keychain search list, and on a Mac where the real app is polling, that triggers keychain-unlock dialogs in the user's session. Signing no longer changes the default keychain (#234), but the `tempo` pin stays as defence in depth. Machine-level documentation for the two shared Macs — inventory, runner-label semantics, registration and Xcode-install runbooks — is centralised in the nixos-config repo: [docs/macos-runners.md](https://git.home.bstjohn.net/St-John-Software/nixos-config/src/branch/main/docs/macos-runners.md).
+- **Runners:** Self-hosted `[host, macos, tempo]` for build/test/quality jobs; `[container, linux]` for security scans, documentation checks, Linux CI/release, PR cleanup and the release dispatcher. `host` and `container` are the two runner families (host-mode Macs vs. in-cluster Linux containers) and share no label; jobs never use `self-hosted` or `beefy`. The label families and how to choose labels are documented canonically in fleet-infra's [docs/runner-labels.md](https://git.home.bstjohn.net/St-John-Software/fleet-infra/src/branch/main/docs/runner-labels.md). The `tempo` label pins these jobs to the Mac that does **not** run the real TempoStatusBarApp: signing jobs put a temp keychain into the runner user's keychain search list, and on a Mac where the real app is polling, that triggers keychain-unlock dialogs in the user's session. Signing no longer changes the default keychain (#234), but the `tempo` pin stays as defence in depth. Machine-level documentation for the two shared Macs — inventory, runner-label semantics, registration and Xcode-install runbooks — is centralised in the nixos-config repo: [docs/macos-runners.md](https://git.home.bstjohn.net/St-John-Software/nixos-config/src/branch/main/docs/macos-runners.md).
 - **Xcode:** every macOS job starts with a shared `Select Xcode` step that finds the newest non-beta Xcode under `/Applications` and exports a **job-scoped `DEVELOPER_DIR`**. It deliberately does *not* use `maxim-lobanov/setup-xcode` or `xcode-select`: those change the machine-global active Xcode via `sudo`, and the two Macs are shared with namey and bonkus CI (which use the same step). No job may mutate machine-global state.
 - **Nix on the Mac:** `swiftlint` and `aws` come from the flake's darwin-only `macos-tools` package (a `symlinkJoin`, pinned by `flake.lock`; built from the `nixpkgs-darwin` input on `nixpkgs-26.05-darwin` because nixos-unstable dropped x86_64-darwin and the Mac runner is Intel (both shared Macs are)), run per command as `nix shell "$GITHUB_WORKSPACE#macos-tools" --command …` after `setup-nix` (not `nix develop`, which falls back to macOS bash 3.2 because the flake's `nixpkgs` input has no x86_64-darwin). `xcodebuild` and signing stay outside nix, and the package carries no cc-stdenv hooks so it never overrides the job's `DEVELOPER_DIR`. Other JSON/HTTP work on the Mac uses the Xcode CLT `/usr/bin/python3`.
 - **Remote actions:** every `uses:` is a full URL pinned to a commit SHA — `https://github.com/actions/checkout@<sha>  # v7.0.1`, `https://github.com/aws-actions/configure-aws-credentials@<sha>  # v6.3.0` — plus `https://code.forgejo.org/forgejo/upload-artifact@<sha>  # v5` (upstream `actions/upload-artifact` v4+ does not work on Forgejo). `./.github/actions/setup-nix` is referenced by path.
 - **No `gh` in CI:** release creation, tag checks, release-body edits and PR comments call the Forgejo API (`${{ github.api_url }}`) with `curl` and `${{ github.token }}`. On Linux, `curl`/`jq` come from the flake `ci` devShell; on the Mac, `/usr/bin/python3` does the work. Forgejo's PR comment endpoint is `/issues/{index}/comments`, so commenting jobs hold `issues: write` as well as `pull-requests: write`.
 - **Concurrency:** PR and main workflows use `cancel-in-progress: true` to cancel redundant runs; the release workflow uses `cancel-in-progress: false` to avoid interrupting in-flight release builds
-- **DMG storage — S3 via OIDC (#177):** built DMGs are stored in the `tempo-statusbar-releases` S3 bucket (job env `S3_BUCKET`/`S3_REGION`/`DOWNLOAD_BASE`), not as release assets. Jobs authenticate with Forgejo's OIDC issuer (`https://www.bstjohn.net/forgejo-oidc`): Forgejo only mints an ID token for a job that sets `enable-openid-connect: true`, so each S3 job carries that plus `permissions: id-token: write`, then `aws-actions/configure-aws-credentials` (SHA-pinned) assumes the IAM role in the `AWS_ROLE_ARN` secret; no static AWS credentials are stored. Fork PRs skip all AWS steps (Forgejo fork PRs get no secrets or OIDC token). Stable releases land at `releases/TempoStatusBarApp-<version>.dmg` (plus a `TempoStatusBarApp-latest.dmg` copy); PR builds at `pr/<N>/TempoStatusBarApp-<version>.dmg`. Both prefixes are public-read over HTTPS. One-time provisioning is handled by [`s3-bootstrap.yml`](#s3-bootstrapyml--s3-bootstrap) (see below).
+- **DMG storage — S3 via OIDC (#177):** built DMGs are stored in the `tempo-statusbar-releases` S3 bucket (job env `S3_BUCKET`/`S3_REGION`/`DOWNLOAD_BASE`), not as release assets. Jobs authenticate with Forgejo's OIDC issuer (`https://www.bstjohn.net/forgejo-oidc`): Forgejo only mints an ID token for a job that sets `enable-openid-connect: true`, so each S3 job carries that plus `permissions: id-token: write`, then `aws-actions/configure-aws-credentials` (SHA-pinned) assumes an IAM role whose ARN is hard-coded in the workflow — `ci-tempo-statusbar-pr` for PR uploads and cleanup, `ci-tempo-statusbar-release` for release uploads; no static AWS credentials are stored. Fork PRs skip all AWS steps (Forgejo fork PRs get no secrets or OIDC token). Stable releases land at `releases/TempoStatusBarApp-<version>.dmg` (plus a `TempoStatusBarApp-latest.dmg` copy); PR builds at `pr/<N>/TempoStatusBarApp-<version>.dmg`. Both prefixes are public-read over HTTPS. The bucket and roles are described in [S3 bucket and AWS roles](#s3-bucket-and-aws-roles).
 
 ---
 
@@ -222,13 +222,12 @@ which is what Claws' snapshot job copies to the public GitHub mirror.
 The `linux-v*` tag namespace is deliberately separate from the macOS `v1.3.x`
 line. On Forgejo, a release created through the API with the job token
 **does** fire `release: published` (GitHub suppresses `GITHUB_TOKEN` events;
-Forgejo does not). Because `release-tag.yml` has no tag filter, all three of
-its jobs carry
-`if: ${{ !startsWith(github.event.release.tag_name, 'linux-v') }}` — this guard
-is load-bearing: without it every Linux release would start a macOS
-sign+notarize build with `MARKETING_VERSION=linux-0.1.0`. On
-`workflow_dispatch`, `github.event.release` is null, so the guard evaluates
-true and behaviour is unchanged.
+Forgejo does not). Because `release-tag.yml` has no tag filter, every one of
+its jobs carries a `linux-v` guard — `!startsWith(github.event.release.tag_name, 'linux-v')`
+on `dispatch-release-build`, `security-check` and `documentation-check`, and
+`!startsWith(inputs.tag, 'linux-v')` on the dispatched `release-build`. This
+guard is load-bearing: without it every Linux release would start a macOS
+sign+notarize build with `MARKETING_VERSION=linux-0.1.0`.
 
 x86_64 only — both self-hosted runners are x86_64. `packages.static` is
 defined for `aarch64-linux` in `flake.nix` but nothing builds it; aarch64
@@ -238,36 +237,84 @@ builds from source.
 
 ## `release-tag.yml` — Release Verification
 
-**Trigger:** Forgejo `release` events of type `published` only, manual dispatch
+**Trigger:** Forgejo `release` events of type `published` only; `workflow_dispatch`
+with an optional `tag` input ("Release tag to build and upload; must be
+dispatched on main", default empty)
 
 `published` is the only type listened to because Forgejo fires workflow events
 for releases created or edited through the API with the job token: listening
 to `edited` would make the job's own download-link PATCH re-run the build.
 
+A release is built in two runs of this workflow:
+
+1. **The `release: published` run** does no Mac work. Its
+   `dispatch-release-build` job validates the release and dispatches
+   `release-tag.yml` on `main` with `tag=<tag>`.
+2. **The dispatched run** on `main` builds, signs, notarizes and uploads the
+   tag. Its OIDC subject is `repo:St-John-Software/TempoStatusBar:ref:refs/heads/main`,
+   the only subject `ci-tempo-statusbar-release` trusts. A release run's own
+   subject is `…:ref:refs/tags/<tag>` — per-tag, so it cannot be trusted with
+   an exact match. The dispatched run checks out `inputs.tag`, but its
+   workflow file comes from `main`, so a branch cannot change the release
+   steps. The Mac sign/notarize build therefore runs once per release.
+
 **Jobs:**
 
-| Job | Runner | Description |
-|---|---|---|
-| `release-build` | `[host, macos, tempo]` | Import signing cert → Release build + Archive (both with `MARKETING_VERSION=<tag>` override) + verify signature + DMG (named `TempoStatusBarApp-<version>.dmg`) → upload DMG to S3 + write download link into the release notes → clean up keychain |
-| `security-check` | `[container, linux]` | Trivy scan (see [Trivy gating](#trivy-gating)) |
-| `documentation-check` | `[container, linux]` | Docs presence check |
+| Job | Runner | Runs on | Description |
+|---|---|---|---|
+| `dispatch-release-build` | `[container, linux]` (`ci` devShell) | `release` | Release name/tag check → `curl -X POST $API_URL/repos/$REPO/actions/workflows/release-tag.yml/dispatches` with `{"ref":"main","inputs":{"tag":"<tag>"},"return_run_info":true}` (JSON built with `jq`, authenticated with the job token) → echo the dispatched run number and URL |
+| `release-build` | `[host, macos, tempo]` | `workflow_dispatch` | Verify release for tag (when `tag` is set) → Import signing cert → Release build + Archive (both with `MARKETING_VERSION=<tag>` override) + verify signature + DMG (named `TempoStatusBarApp-<version>.dmg`) → upload DMG to S3 + write download link into the release notes (when `tag` is set) → clean up keychain |
+| `security-check` | `[container, linux]` | both | Trivy scan (see [Trivy gating](#trivy-gating)) |
+| `documentation-check` | `[container, linux]` | both | Docs presence check |
 
-The version comes from `github.event.release.tag_name` with the leading `v`
-stripped (falling back to `github.ref_name` on `workflow_dispatch`), not from
-`GITHUB_REF`. The `release-build` job (`enable-openid-connect: true`) uploads
-the DMG to `s3://<bucket>/releases/TempoStatusBarApp-<version>.dmg` (and copies
-it to `releases/TempoStatusBarApp-latest.dmg`) using the OIDC role, then
-appends a `**Download:** [<dmg>](<S3 URL>)` line to the Forgejo release body
-with `curl -X PATCH $API_URL/repos/$REPO/releases/<id>` (the JSON body is built
-with `/usr/bin/python3`), so the release page remains a discoverable download
-point. That PATCH fires `release: edited`, which this workflow does not listen
-to. All AWS/upload/edit steps are gated with `if: github.event_name == 'release'`
-so manual `workflow_dispatch` runs (used for build testing) skip the upload and
-do not fail due to the absence of an associated release.
+The workflow holds `actions: write` so the job token can call the dispatch
+API. A non-fork job token has write on every repo unit, and the dispatch API
+starts the run directly rather than through the event notifier, so Forgejo's
+rule that job-token events trigger no workflows does not apply. Concurrency is
+grouped by `inputs.tag || github.event.release.tag_name || github.ref`, so the
+dispatched run waits for the release-event run to finish; check for a blocked
+run before dispatching by hand. `security-check` and `documentation-check` check
+out without `ref:`, so in the dispatched run they scan `main`, not the tag.
+
+The version is `inputs.tag` with the leading `v` stripped (falling back to
+`github.ref_name` on a manual build test), not `GITHUB_REF`. When `tag` is
+set, `release-build` (`enable-openid-connect: true`) assumes
+`ci-tempo-statusbar-release`, uploads the DMG to
+`s3://<bucket>/releases/TempoStatusBarApp-<version>.dmg` (and copies it to
+`releases/TempoStatusBarApp-latest.dmg`), then re-reads the release by tag
+(`GET $API_URL/repos/$REPO/releases/tags/<tag>`, since `github.event.release`
+is null on a dispatched run) and appends a `**Download:** [<dmg>](<S3 URL>)`
+line to its body with `curl -X PATCH $API_URL/repos/$REPO/releases/<id>` (the
+JSON is built with `/usr/bin/python3`), so the release page remains a
+discoverable download point. That PATCH fires `release: edited`, which this
+workflow does not listen to. All AWS/upload/edit steps are gated with
+`if: inputs.tag != ''`.
+
+**Manual dispatch without `tag`** is a build test of the dispatched ref: it
+signs and notarizes but uploads nothing and edits no release.
+
+**Manual fallback:** if the token-dispatched run does not start, the release
+has no DMG. Run the workflow by hand from the Actions tab on **`main`** with
+`tag=vX.Y.Z`. A dispatch on any other ref, or with a non-`v*` tag, fails the
+"Verify release for tag" step; a `linux-v*` tag skips `release-build` entirely.
 
 ### Release name / tag consistency check
 
-The first step of `release-build` asserts that `github.event.release.tag_name` equals `github.event.release.name`. This catches the failure mode where a release is created in the UI with a title like `v1.3.0-RC1` but the underlying tag is left at `v1.3.0` — the release looks correct in the UI but the workflow builds the wrong version, and the stable `v1.3.0` tag gets pushed prematurely. The check fails the workflow before any build work runs and prints recovery instructions. It's gated on `if: github.event_name == 'release'` so `workflow_dispatch` runs are unaffected.
+The check runs twice. `dispatch-release-build`'s first step asserts that
+`github.event.release.tag_name` equals `github.event.release.name` before
+anything is dispatched. This catches the failure mode where a release is
+created in the UI with a title like `v1.3.0-RC1` but the underlying tag is left
+at `v1.3.0` — the release looks correct in the UI but the workflow builds the
+wrong version, and the stable `v1.3.0` tag gets pushed prematurely. The check
+prints recovery instructions.
+
+The dispatched `release-build` repeats it in its first step, "Verify release
+for tag" (only when `tag` is set; `/usr/bin/curl` and `/usr/bin/python3`,
+since the Macs have no `jq`). It fails unless the run's ref is
+`refs/heads/main`, the tag matches `^v[0-9]`, and
+`GET $API_URL/repos/$REPO/releases/tags/<tag>` returns a non-draft release
+whose name equals its tag — so a hand-dispatched run cannot upload for an
+unpublished or mis-named release. It prints the same recovery text.
 
 ---
 
@@ -275,24 +322,35 @@ The first step of `release-build` asserts that `github.event.release.tag_name` e
 
 **Trigger:** `pull_request` with `types: [closed]` (fires on both merge and unmerged close)
 
-Runs on `[container, linux]` with `enable-openid-connect: true`. Checks out the repo, runs `setup-nix`, and executes every step inside the flake's `ci` devShell (`defaults.run.shell`), which supplies `aws` (`awscli2`) — there is no installer step. It assumes the OIDC role, then runs `aws s3 rm s3://<bucket>/pr/<N>/ --recursive` (with `|| true` so a missing prefix is non-fatal). Skipped for fork PRs — they never uploaded.
+Runs on `[container, linux]` with `enable-openid-connect: true`. Checks out the repo, runs `setup-nix`, and executes every step inside the flake's `ci` devShell (`defaults.run.shell`), which supplies `aws` (`awscli2`) — there is no installer step. It assumes `ci-tempo-statusbar-pr`, then runs `aws s3 rm s3://<bucket>/pr/<N>/ --recursive` (with `|| true` so a missing prefix is non-fatal). Skipped for fork PRs — they never uploaded.
 
-This workflow exists so per-PR DMG builds do not accumulate in the bucket indefinitely. As a backstop for cleanup runs that never fire, the bucket has a lifecycle rule (created by `s3-bootstrap.yml`) that expires `pr/`-prefixed objects after 30 days.
+This workflow exists so per-PR DMG builds do not accumulate in the bucket indefinitely. As a backstop for cleanup runs that never fire, the bucket has a lifecycle rule that expires `pr/`-prefixed objects after 30 days (see [S3 bucket and AWS roles](#s3-bucket-and-aws-roles)).
 
 ---
 
-## `s3-bootstrap.yml` — S3 Bootstrap
+## S3 bucket and AWS roles
 
-**Trigger:** `workflow_dispatch` only, with inputs `bucket` (default `tempo-statusbar-releases`), `region` (default `us-east-1`), and `role_name` (default `tempo-statusbar-github-actions` — the historical name, kept so the existing `AWS_ROLE_ARN` stays valid)
+The bucket `tempo-statusbar-releases` (us-east-1) is hand-managed: no tofu or
+workflow provisions it, and nothing in this repo changes it. Its current
+configuration:
 
-One-time — but idempotent, safe to re-run — provisioning of the AWS resources the release/PR workflows depend on. Runs on `[container, linux]` inside the flake's `ci` devShell (for `aws`), using **temporary static credentials** read from the `AWS_BOOTSTRAP_ACCESS_KEY_ID` / `AWS_BOOTSTRAP_SECRET_ACCESS_KEY` Forgejo Actions secrets (it fails fast with a clear error if they are unset). It creates or updates:
+- **Public-access block:** `BlockPublicAcls=true, IgnorePublicAcls=true, BlockPublicPolicy=false, RestrictPublicBuckets=false` — ACLs stay blocked; access is granted by bucket policy only.
+- **Bucket policy:** one statement, `PublicReadDownloads`, allowing anonymous `s3:GetObject` on `arn:aws:s3:::tempo-statusbar-releases/releases/*` and `arn:aws:s3:::tempo-statusbar-releases/pr/*`.
+- **Lifecycle:** rule `expire-pr-builds` expires `pr/`-prefixed objects after 30 days (backstop for missed PR-close cleanups).
 
-1. The S3 bucket, with a public-access-block configuration that blocks ACLs but permits a bucket policy, and a bucket policy granting anonymous `s3:GetObject` on `releases/*` and `pr/*` only
-2. A lifecycle rule expiring `pr/`-prefixed objects after 30 days (backstop for missed PR-close cleanups)
-3. The Forgejo OIDC identity provider `arn:aws:iam::<account>:oidc-provider/www.bstjohn.net/forgejo-oidc` (`https://www.bstjohn.net/forgejo-oidc`, client ID `sts.amazonaws.com`, no thumbprint), skipped if it already exists — it is account-global and may be shared with other repos
-4. An IAM role whose trust policy accepts the Forgejo issuer only — `StringEquals www.bstjohn.net/forgejo-oidc:aud = sts.amazonaws.com` and `StringLike www.bstjohn.net/forgejo-oidc:sub = repo:St-John-Software/TempoStatusBar:*` — carrying an inline policy allowing only `s3:PutObject`/`GetObject`/`DeleteObject` on the bucket's objects and `s3:ListBucket` on the bucket. Re-running against an existing role rewrites its trust policy, which is how the role moved off GitHub's issuer after the migration.
+CI reaches the bucket through two IAM roles owned by the aws-account repo,
+[`tier1/tempo-statusbar.tf`](https://git.home.bstjohn.net/St-John-Software/aws-account/src/branch/main/tier1/tempo-statusbar.tf),
+which aws-account's tier-1 CI applies on merge. Both trust the Forgejo OIDC
+issuer (`https://www.bstjohn.net/forgejo-oidc`, audience `sts.amazonaws.com`)
+with exact subjects only:
 
-The final step prints the role ARN and the decommissioning checklist to the job log: store the ARN as the `AWS_ROLE_ARN` Forgejo Actions secret, revoke the temporary access key in IAM, and delete both bootstrap secrets. After that, no static AWS credentials exist anywhere — all recurring workflows authenticate via OIDC.
+| Role | Trusted subject(s) | Permissions | Used by |
+|---|---|---|---|
+| `arn:aws:iam::762672791738:role/ci-tempo-statusbar-pr` | `repo:St-John-Software/TempoStatusBar:pull_request` | `s3:PutObject`/`s3:DeleteObject` on `…/pr/*`; `s3:ListBucket` on the bucket with `s3:prefix` `pr/*` | `pr-verification.yml`, `pr-cleanup.yml` |
+| `arn:aws:iam::762672791738:role/ci-tempo-statusbar-release` | `repo:St-John-Software/TempoStatusBar:ref:refs/heads/main`, `…:ref:main` | `s3:PutObject` on `…/releases/*` only | `release-tag.yml` (dispatched on `main`) |
+
+The role ARNs are hard-coded in the workflows; there is no role-ARN secret. To
+change a role's trust or permissions, open a PR in aws-account.
 
 ---
 
@@ -333,7 +391,6 @@ The release and PR workflows additionally **notarize and staple** the DMG so Gat
 | `AC_API_KEY_ID` | App Store Connect API Key ID |
 | `AC_API_ISSUER_ID` | App Store Connect API Issuer ID |
 | `AC_API_KEY_P8_BASE64` | Base64-encoded `.p8` private key downloaded when the API key was created |
-| `AWS_ROLE_ARN` | ARN of the IAM role (created by `s3-bootstrap.yml`) that release/PR/cleanup jobs assume via Forgejo OIDC for S3 access |
 
 **Signing process (all workflows):**
 
@@ -354,7 +411,7 @@ The release and PR workflows additionally **notarize and staple** the DMG so Gat
 1. Decode `AC_API_KEY_P8_BASE64` to `$RUNNER_TEMP/AuthKey.p8`
 2. Sign the DMG itself with `codesign --sign "Developer ID Application: …" --timestamp` (notarytool will reject an unsigned container)
 3. Submit the DMG via `xcrun notarytool submit … --key … --key-id … --issuer … --wait --timeout 30m`
-4. Staple with `xcrun stapler staple` so the ticket is embedded in the DMG and Gatekeeper does not need to call home on first launch
+4. Staple with `xcrun stapler staple` so the ticket is embedded in the DMG and Gatekeeper does not need to call home on first launch (staple and validate are each retried up to 4 times with 15s/30s/60s backoff, because Apple's CloudKit ticket endpoint occasionally drops connections with `NSURLErrorDomain -1005`)
 5. Re-verify with `xcrun stapler validate` and `spctl --assess --type open --context context:primary-signature` — this is the canonical end-user Gatekeeper check
 6. Post-run: delete the temporary keychain and `AuthKey.p8`
 
@@ -368,7 +425,7 @@ The release and PR workflows additionally **notarize and staple** the DMG so Gat
 - **Shared-runner contract** — the two self-hosted Macs are shared by TempoStatusBar, namey, and bonkus CI. Every macOS job in all three repos follows the same rules: no `sudo`; never mutate machine-global state (`xcode-select`, system keychain search order, Homebrew upgrades); guard tool installs with `command -v <tool> || <user-scoped install>`; keep signing material in per-job temp keychains that are deleted in an `always()` cleanup step; set `timeout-minutes` on every macOS job so a wedged job can't starve the two-runner pool; and hold a job-scoped `caffeinate` sleep assertion — macOS idle sleep tracks user input, not CPU load, so a busy build can't keep a Mac awake by itself (bonkus#1550). Every macOS job here does this via `~/bin/keep-awake` from the nixos-config repo (`home/mac/keep_awake.sh`, installed into `~/bin` by `home-manager switch`): `keep-awake on <minutes>` right after checkout, `keep-awake off` in an `always()` final step; warn-only if the Mac lacks it — see nixos-config `docs/macos-runners.md`, "Power / keep-awake".
   - **Caveat — signing jobs mutate the user keychain search list (not the default).** The signing step prepends the temp keychain to the user's keychain search list (`security list-keychains -d user -s "$KEYCHAIN_PATH" <existing entries>`) so `codesign`/Xcode can find the identity, while leaving the login keychain searchable and as the default. Earlier versions of this step instead replaced the search list wholesale and set the temp keychain as the user default, on the theory that the runner user has no GUI login session; that was only true of Brendans-MacBook-Pro-3 before its runner was reinstalled, and TSB jobs no longer run there. On the `tempo` Mac, which runs as a logged-in GUI user, changing the default keychain made GUI-session daemons such as `assistantd` pick up the temp "build" keychain as their default and prompt for its password once it was locked or later deleted (#234). The search-list change is reverted in the `always()` "Clean up signing keychain" step: it rebuilds the search list from the current list minus any `build.keychain-db` entries (falling back to `login.keychain-db` alone if nothing remains). The default is only touched as a self-heal, and only if it currently points at a build keychain (left over from a run that predates #234) — the step never assumes the import step changed it, since it no longer does. The temp keychain is then deleted. **Residual risk:** because the search list is only prepended to rather than replaced, the worst case if cleanup never runs (runner disconnects mid-job, process killed out-of-band, post-steps skipped) is an orphaned `build.keychain-db` entry left in the search list — a harmless extra search-list entry rather than a hijacked default. The next signing job or cleanup run removes it. Removal matches on the `build.keychain-db` basename alone, not the full path, so it is scoped to entries with that exact name rather than to this repo's jobs specifically — a temp keychain from another repo's job that happened to share the name would also be swept up.
 - **DMG distribution via S3, not release assets (#177)** — DMGs for both PR and tagged-release builds are uploaded to S3 with `aws s3 cp`, NOT attached as release assets (storage/bandwidth limits were being hit on GitHub) and NOT via an upload-artifact action. The artifact action always wraps its payload in a `.zip`; macOS treats a DMG extracted from a downloaded zip as a different quarantine origin than a DMG downloaded raw over HTTPS, causing Keychain re-prompts even with identical signing identities — the S3 links serve the raw `.dmg`, keeping the quarantine origin consistent. PR uploads are cleaned up by `pr-cleanup.yml` when the PR closes (plus a 30-day lifecycle backstop).
-- **OIDC over static AWS keys** — CI never holds long-lived AWS credentials. Jobs that touch S3 set `enable-openid-connect: true` (Forgejo mints no ID token without it), declare `id-token: write`, and assume the `AWS_ROLE_ARN` role via `aws-actions/configure-aws-credentials`; the role's trust policy only accepts tokens from the Forgejo issuer whose subject matches `repo:St-John-Software/TempoStatusBar:*`, and its permissions are limited to object read/write/delete in the release bucket. The `build-and-test` job's own `permissions` block replaces the workflow-level permissions, so `id-token: write` must be listed explicitly on the job; `contents` dropped back to `read` there when release publishing moved to S3.
+- **OIDC over static AWS keys** — CI never holds long-lived AWS credentials. Jobs that touch S3 set `enable-openid-connect: true` (Forgejo mints no ID token without it), declare `id-token: write`, and assume a hard-coded role ARN via `aws-actions/configure-aws-credentials`. Trust is exact-subject per role, not `StringLike repo:St-John-Software/TempoStatusBar:*`: `ci-tempo-statusbar-pr` trusts only `…:pull_request` and can touch only `pr/*`, and `ci-tempo-statusbar-release` trusts only `…:ref:refs/heads/main` (and `…:ref:main`) and can only put `releases/*`, so a PR run cannot assume the release role. Both roles live in aws-account `tier1/tempo-statusbar.tf` (see [S3 bucket and AWS roles](#s3-bucket-and-aws-roles)). The `build-and-test` job's own `permissions` block replaces the workflow-level permissions, so `id-token: write` must be listed explicitly on the job; `contents` dropped back to `read` there when release publishing moved to S3.
 - **`cancel-in-progress`** — `true` for PR and main workflows to prevent stale runs from blocking the queue; `false` for the release workflow so in-flight release builds are not interrupted.
 - **DMG naming** — PR builds: `TempoStatusBarApp-pr-<N>-<sha>`; release builds: `TempoStatusBarApp-<version>`.
 - **Artifact retention** — `test-results` (xcresult) artifacts: 3 days for both PRs and main. PR build DMGs live under `s3://<bucket>/pr/<N>/` and are deleted when the PR closes (`pr-cleanup.yml`; 30-day lifecycle backstop). Tagged-release DMGs live under `s3://<bucket>/releases/` and do not expire. Forgejo runners have caches off and no org storage quota, so there is no storage-cleanup workflow.
@@ -382,7 +439,7 @@ The release and PR workflows additionally **notarize and staple** the DMG so Gat
 - **Notarization on PR and release builds** — both `pr-verification.yml` and `release-tag.yml` sign, notarize, and staple the DMG so users (including maintainers grabbing a PR build) don't hit Gatekeeper's first-launch warning. Main builds still skip notarization because their DMGs are not distributed. Notarization adds ~30s–2min per build. The PR notarization steps are gated on `github.event.pull_request.head.repo.full_name == github.repository` so that fork PRs (no secrets) skip them gracefully — those PRs still produce a signed DMG, just not a notarized one, and the publish + comment steps are already skipped for forks.
 - **Signing verification in CI** — the "Verify code signature" step asserts both `Authority=Developer ID Application:` and the presence of the `runtime` flag in the signature. This catches accidental ad-hoc, self-signed, or unhardened builds before the DMG is packaged.
 - **`spctl --assess` over `stapler validate` alone** — the release workflow runs both. `stapler validate` confirms a ticket exists locally; `spctl --assess --type open --context context:primary-signature` is what Gatekeeper actually runs when a user opens the file from a quarantined download. Asserting both protects against the case where stapling appeared to succeed but the ticket doesn't satisfy Gatekeeper.
-- **Separate `linux-v*` tag namespace, release assets not S3** — the Linux tray app releases on its own `linux-vX.Y.Z` line so its cadence is not welded to the macOS `v1.3.x` line, and its tarball is attached to the Forgejo release rather than uploaded to S3. The DMG went to S3 because of its size and the macOS quarantine-origin problem (see above); neither applies to a ~10 MB tarball, and release assets are what the Claws snapshot job copies to the public GitHub mirror, which is the whole point of publishing it. The version is read from `linux/Cargo.toml` rather than from a tag the operator types, so the tag, the flake and the binary's `--version` cannot disagree — the workflow asserts all three. Because `release-tag.yml` triggers on `on: release` with no tag filter, and Forgejo fires that event for `linux-release.yml`'s API-created release, every one of its jobs needs a `!startsWith(github.event.release.tag_name, 'linux-v')` guard; adding a job there without one restarts the macOS sign+notarize path on Linux releases.
-- **Self-hosted runners — macOS and Linux** — build/test/quality jobs run on `[host, macos, tempo]`. The Linux-only jobs (Trivy scans, docs checks, Linux CI/release, PR cleanup, S3 bootstrap) run on `[container, linux]` and select the `container` runner family explicitly, so they are never scheduled onto a host-mode runner such as a Mac.
+- **Separate `linux-v*` tag namespace, release assets not S3** — the Linux tray app releases on its own `linux-vX.Y.Z` line so its cadence is not welded to the macOS `v1.3.x` line, and its tarball is attached to the Forgejo release rather than uploaded to S3. The DMG went to S3 because of its size and the macOS quarantine-origin problem (see above); neither applies to a ~10 MB tarball, and release assets are what the Claws snapshot job copies to the public GitHub mirror, which is the whole point of publishing it. The version is read from `linux/Cargo.toml` rather than from a tag the operator types, so the tag, the flake and the binary's `--version` cannot disagree — the workflow asserts all three. Because `release-tag.yml` triggers on `on: release` with no tag filter, and Forgejo fires that event for `linux-release.yml`'s API-created release, every one of its jobs needs a `linux-v` guard (`!startsWith(github.event.release.tag_name, 'linux-v')`, or `!startsWith(inputs.tag, 'linux-v')` on the dispatched build); adding a job there without one restarts the macOS sign+notarize path on Linux releases.
+- **Self-hosted runners — macOS and Linux** — build/test/quality jobs run on `[host, macos, tempo]`. The Linux-only jobs (Trivy scans, docs checks, Linux CI/release, PR cleanup, release dispatch) run on `[container, linux]` and select the `container` runner family explicitly, so they are never scheduled onto a host-mode runner such as a Mac.
 - **CI dependencies are repo-owned** — the self-hosted Linux runner baseline is `nix`/`git`/`docker` only; `curl`, `jq`, `aws` and every other CLI must come from `flake.nix`'s `ci` devShell. A bare tool missing from the runner dies with exit 127 (issue #218), and `|| true` guards turn that into a silent no-op rather than a visible failure. Prefer a job-level `defaults.run.shell` over per-call wrapping for jobs that only shell out to CLI tools; it leaves the scripts untouched. Never install with `sudo` — NixOS runners have none.
 - **Real-keychain test skip on CI (`TEMPO_SKIP_KEYCHAIN_TESTS`)** — `CredentialManagerHasStoredCredentialsTests` (see [OVERVIEW.md](OVERVIEW.md#testing)) exercises the real Keychain via `CredentialManager.shared`, including deleting the item under the production service name in `setUp`/`tearDown`. On the shared self-hosted Macs, the runner user's login keychain holds genuine credentials, and headless keychain access blocks on an authorization dialog instead of failing fast (observed as multi-minute test hangs, and once an actual password prompt on the runner's screen). `pr-verification.yml` and `main-verification.yml` set `TEST_RUNNER_TEMPO_SKIP_KEYCHAIN_TESTS: "1"` on the "Run unit tests" step; `xcodebuild` only forwards environment variables prefixed `TEST_RUNNER_` into the test-host process (stripping the prefix), so the test suite sees plain `TEMPO_SKIP_KEYCHAIN_TESTS=1`. The gate lives in `setUpWithError` (via `XCTSkipIf`) rather than `setUp`, because it must run before any keychain access is attempted. Locally, without the env var, the suite runs unskipped against the real Keychain as before. The same flag also short-circuits `WorklogStateManager.init()` (a private `isKeychainAccessDisabled` check), skipping `setupTimer()`, `setupNetworkMonitor()`, and `checkCredentialsAndRefresh()` — otherwise `AppDelegate`'s `WorklogStateManager.shared` would read the real login keychain under the production service name from the ad-hoc-signed test host app launching in the runner's GUI session, which could prompt for access (#234).

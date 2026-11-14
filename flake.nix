@@ -67,10 +67,10 @@
         # Minimal shell for Linux workflow steps that talk to the Forgejo API
         # or AWS — .forgejo/workflows/linux-ci.yml's PR comment,
         # linux-release.yml's version gate and release publish, pr-cleanup.yml
-        # and s3-bootstrap.yml. Kept separate from `default` so these jobs
-        # never realise the Rust + GTK4 closure. The runner baseline is
-        # nix/git/docker only (issue #218); CI uses curl against the Forgejo
-        # API, not `gh`.
+        # and release-tag.yml's release dispatcher. Kept separate from
+        # `default` so these jobs never realise the Rust + GTK4 closure. The
+        # runner baseline is nix/git/docker only (issue #218); CI uses curl
+        # against the Forgejo API, not `gh`.
         ci = pkgs.mkShell {
           packages = [ pkgs.curl pkgs.jq pkgs.awscli2 ];
         };

@@ -4,43 +4,60 @@ on:
   # `published` only. Forgejo fires workflow events for releases created or
   # edited through the API with the job token, so listening to `edited` would
   # make this workflow's own download-link PATCH re-run the whole build.
+  #
+  # The `release` run does no Mac work: dispatch-release-build validates the
+  # release and dispatches this workflow on `main` with `tag=<tag>`. Only that
+  # dispatched run (OIDC sub `repo:…:ref:refs/heads/main`) can assume the
+  # ci-tempo-statusbar-release role — a release run's sub is per-tag
+  # (`ref:refs/tags/<tag>`) and cannot be trusted exactly (aws-account
+  # tier1/tempo-statusbar.tf). Its workflow file comes from `main`, so a
+  # branch cannot change the release steps.
   release:
     types: [published]
+  # Without `tag`: a build test of the dispatched ref, no upload.
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and upload; must be dispatched on main
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: write
   id-token: write
+  # dispatch-release-build calls the workflow dispatch API with the job token.
+  actions: write
 
 concurrency:
-  group: release-verification-${{ github.ref }}
+  group: release-verification-${{ inputs.tag || github.event.release.tag_name || github.ref }}
   cancel-in-progress: false
 
 jobs:
-  release-build:
-    name: Release Build
-    runs-on: [host, macos, tempo]
+  dispatch-release-build:
+    name: Dispatch Release Build
     # `on: release` has no tag filter, so a `linux-v*` release cut by
     # linux-release.yml would otherwise start a full macOS sign+notarize build
     # and derive a nonsense MARKETING_VERSION ("linux-0.1.0"). The two release
-    # lines are deliberately separate. `github.event.release` is null on
-    # workflow_dispatch, so the expression is true there and behaviour is
-    # unchanged. Load-bearing on Forgejo: linux-release.yml creates its
-    # release through the API with the job token, and Forgejo does fire
-    # `release: published` for that.
-    if: ${{ !startsWith(github.event.release.tag_name, 'linux-v') }}
-    # Only two Macs serve three repos — a wedged job must not hold one for hours.
-    timeout-minutes: 60
-    # Forgejo mints an OIDC ID token only when this is set on the job.
-    enable-openid-connect: true
-    env:
-      S3_BUCKET: tempo-statusbar-releases
-      S3_REGION: us-east-1
-      DOWNLOAD_BASE: https://tempo-statusbar-releases.s3.us-east-1.amazonaws.com
-
+    # lines are deliberately separate. Load-bearing on Forgejo:
+    # linux-release.yml creates its release through the API with the job
+    # token, and Forgejo does fire `release: published` for that.
+    if: github.event_name == 'release' && !startsWith(github.event.release.tag_name, 'linux-v')
+    runs-on: [container, linux]
+    timeout-minutes: 15
+    # `curl`/`jq` come from the repo's `ci` devShell — the runner baseline is
+    # nix/git/docker only.
+    defaults:
+      run:
+        shell: nix --extra-experimental-features nix-command --extra-experimental-features flakes develop ${{ github.workspace }}#ci --command bash -euo pipefail {0}
     steps:
+    - name: Checkout code
+      uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+    - name: Set up Nix
+      uses: ./.github/actions/setup-nix
+
     - name: Validate release name matches tag
-      if: github.event_name == 'release'
       env:
         RELEASE_TAG: ${{ github.event.release.tag_name }}
         RELEASE_NAME: ${{ github.event.release.name }}
@@ -62,8 +79,112 @@ jobs:
         fi
         echo "✅ Release name and tag both equal '$RELEASE_TAG'"
 
+    - name: Dispatch release build on main
+      # The job token has write on every unit of a non-fork repo, so it may
+      # call the dispatch API; the dispatch bypasses the event notifier, so
+      # Forgejo's "no workflows triggered by the job token" rule does not
+      # apply. If the dispatched run does not start, run this workflow by
+      # hand on `main` with `tag=<tag>` (docs/ci-cd.md).
+      env:
+        FORGEJO_TOKEN: ${{ github.token }}
+        API_URL: ${{ github.api_url }}
+        SERVER_URL: ${{ github.server_url }}
+        REPO: ${{ github.repository }}
+        RELEASE_TAG: ${{ github.event.release.tag_name }}
+      run: |
+        jq -n --arg tag "$RELEASE_TAG" \
+          '{ref: "main", inputs: {tag: $tag}, return_run_info: true}' > dispatch.json
+        RESPONSE=$(curl -fsS -X POST \
+          -H "Authorization: token $FORGEJO_TOKEN" \
+          -H 'Content-Type: application/json' \
+          --data @dispatch.json \
+          "$API_URL/repos/$REPO/actions/workflows/release-tag.yml/dispatches")
+        rm -f dispatch.json
+        RUN_NUMBER=$(jq -r '.run_number // empty' <<<"$RESPONSE")
+        if [ -n "$RUN_NUMBER" ]; then
+          echo "✅ Dispatched release build for $RELEASE_TAG: run #$RUN_NUMBER"
+          echo "   $SERVER_URL/$REPO/actions/runs/$RUN_NUMBER"
+        else
+          echo "✅ Dispatched release build for $RELEASE_TAG (no run info returned)"
+          echo "   $SERVER_URL/$REPO/actions"
+        fi
+
+  release-build:
+    name: Release Build
+    runs-on: [host, macos, tempo]
+    # Runs only on workflow_dispatch: dispatched on `main` with `tag` by
+    # dispatch-release-build (signs, notarizes and uploads), or by hand
+    # without `tag` as a build test with no upload. A `linux-v*` tag never
+    # starts a Mac build.
+    if: github.event_name == 'workflow_dispatch' && !startsWith(inputs.tag, 'linux-v')
+    # Only two Macs serve three repos — a wedged job must not hold one for hours.
+    timeout-minutes: 60
+    # Forgejo mints an OIDC ID token only when this is set on the job.
+    enable-openid-connect: true
+    env:
+      S3_BUCKET: tempo-statusbar-releases
+      S3_REGION: us-east-1
+      DOWNLOAD_BASE: https://tempo-statusbar-releases.s3.us-east-1.amazonaws.com
+
+    steps:
+    - name: Verify release for tag
+      # Only a run on `main` can assume ci-tempo-statusbar-release, and only
+      # for a published (non-draft) v* release whose name equals its tag.
+      # /usr/bin/curl and the Xcode CLT python3 — no jq on the Macs.
+      if: inputs.tag != ''
+      env:
+        FORGEJO_TOKEN: ${{ github.token }}
+        API_URL: ${{ github.api_url }}
+        REPO: ${{ github.repository }}
+        RELEASE_TAG: ${{ inputs.tag }}
+        RUN_REF: ${{ github.ref }}
+      run: |
+        set -euo pipefail
+        if [ "$RUN_REF" != "refs/heads/main" ]; then
+          echo "❌ A release build must be dispatched on main (got '$RUN_REF')."
+          exit 1
+        fi
+        if ! [[ "$RELEASE_TAG" =~ ^v[0-9] ]]; then
+          echo "❌ Tag '$RELEASE_TAG' is not a v* release tag."
+          exit 1
+        fi
+        ENC_TAG=$(/usr/bin/python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["RELEASE_TAG"], safe=""))')
+        if ! /usr/bin/curl -fsS -H "Authorization: token $FORGEJO_TOKEN" \
+            "$API_URL/repos/$REPO/releases/tags/$ENC_TAG" > release.json; then
+          echo "❌ No release found for tag '$RELEASE_TAG'."
+          rm -f release.json
+          exit 1
+        fi
+        if [ "$(/usr/bin/python3 -c 'import json; print(bool(json.load(open("release.json")).get("draft")))')" != "False" ]; then
+          echo "❌ Release '$RELEASE_TAG' is a draft; publish it first."
+          rm -f release.json
+          exit 1
+        fi
+        RELEASE_NAME=$(/usr/bin/python3 -c 'import json; print(json.load(open("release.json")).get("name") or "")')
+        rm -f release.json
+        if [ -z "$RELEASE_NAME" ]; then
+          echo "❌ Release name is empty. Set the release title to match the tag (e.g. '$RELEASE_TAG')."
+          exit 1
+        fi
+        if [ "$RELEASE_TAG" != "$RELEASE_NAME" ]; then
+          echo "❌ Release name '$RELEASE_NAME' does not match tag '$RELEASE_TAG'."
+          echo ""
+          echo "This usually means an RC release was created with the title 'v1.2.3-RC1'"
+          echo "but the tag was left at 'v1.2.3', producing an orphaned tag at the stable"
+          echo "version. Either:"
+          echo "  - delete this release and its tag '$RELEASE_TAG' in Forgejo (Releases → Delete, then Tags → Delete)"
+          echo "    and recreate it with matching name and tag, OR"
+          echo "  - edit the release to make name and tag identical."
+          exit 1
+        fi
+        echo "✅ Release '$RELEASE_TAG' is published and its name matches the tag"
+
     - name: Checkout code
       uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        # Build the release tag; the workflow file itself still comes from
+        # `main`. Empty (manual build test) means the dispatched ref.
+        ref: ${{ inputs.tag }}
 
     - name: Prevent idle sleep
       # macOS idle sleep tracks user input, not CPU load, so a busy job can't
@@ -108,9 +229,9 @@ jobs:
     - name: Extract version from tag
       id: version
       env:
-        # The release event's tag, not GITHUB_REF. On workflow_dispatch there
-        # is no release, so fall back to the dispatched ref's name.
-        RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        # The dispatched release tag; a manual build test without `tag`
+        # falls back to the dispatched ref's name.
+        RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
       run: |
         # Extract version from the release tag (remove 'v' prefix if present)
         VERSION=${RELEASE_TAG#v}
@@ -292,22 +413,39 @@ jobs:
 
     - name: Staple notarization ticket
       run: |
+        set -euo pipefail
+        retry() {
+          local delays=(15 30 60) attempt=1 rc
+          while true; do
+            "$@" && return 0
+            rc=$?
+            if [ "$attempt" -gt "${#delays[@]}" ]; then
+              echo "::error::$* failed after $attempt attempts (exit $rc)"
+              return "$rc"
+            fi
+            echo "::warning::$* failed (exit $rc), attempt $attempt; retrying in ${delays[$((attempt-1))]}s"
+            sleep "${delays[$((attempt-1))]}"
+            attempt=$((attempt+1))
+          done
+        }
         DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
-        xcrun stapler staple "$DMG"
-        xcrun stapler validate "$DMG"
+        retry xcrun stapler staple "$DMG"
+        retry xcrun stapler validate "$DMG"
 
         # Final Gatekeeper assessment as an end-user would experience it
         spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
 
     - name: Configure AWS credentials
-      if: github.event_name == 'release'
+      if: inputs.tag != ''
       uses: https://github.com/aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd  # v6.3.0
       with:
-        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+        # PutObject on releases/* only; trusts this repo's `main` only
+        # (aws-account tier1/tempo-statusbar.tf).
+        role-to-assume: arn:aws:iam::762672791738:role/ci-tempo-statusbar-release
         aws-region: ${{ env.S3_REGION }}
 
     - name: Upload DMG to S3
-      if: github.event_name == 'release'
+      if: inputs.tag != ''
       run: |
         set -euo pipefail
         DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
@@ -324,20 +462,26 @@ jobs:
       # On Forgejo this token-driven edit does fire a `release: edited`
       # event; the workflow listens to `published` only, so it does not
       # re-trigger. python3 is the Xcode CLT one — no nix/jq on the Macs.
-      if: github.event_name == 'release'
+      # The release is re-read by tag: `github.event.release` is null on the
+      # dispatched run.
+      if: inputs.tag != ''
       env:
         FORGEJO_TOKEN: ${{ github.token }}
         API_URL: ${{ github.api_url }}
         REPO: ${{ github.repository }}
-        RELEASE_ID: ${{ github.event.release.id }}
-        RELEASE_BODY: ${{ github.event.release.body }}
+        RELEASE_TAG: ${{ inputs.tag }}
         VERSION: ${{ steps.version.outputs.version }}
       run: |
         set -euo pipefail
         DMG="TempoStatusBarApp-$VERSION.dmg"
         export DMG URL="$DOWNLOAD_BASE/releases/$DMG"
-        /usr/bin/python3 -c 'import json, os; print(json.dumps({"body": "%s\n\n---\n**Download:** [%s](%s)" % (os.environ["RELEASE_BODY"], os.environ["DMG"], os.environ["URL"])}))' > release-body.json
-        curl -fsS -X PATCH \
+        ENC_TAG=$(/usr/bin/python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["RELEASE_TAG"], safe=""))')
+        /usr/bin/curl -fsS -H "Authorization: token $FORGEJO_TOKEN" \
+          "$API_URL/repos/$REPO/releases/tags/$ENC_TAG" > release.json
+        RELEASE_ID=$(/usr/bin/python3 -c 'import json; print(json.load(open("release.json"))["id"])')
+        /usr/bin/python3 -c 'import json, os; body = json.load(open("release.json")).get("body") or ""; print(json.dumps({"body": "%s\n\n---\n**Download:** [%s](%s)" % (body, os.environ["DMG"], os.environ["URL"])}))' > release-body.json
+        rm -f release.json
+        /usr/bin/curl -fsS -X PATCH \
           -H "Authorization: token $FORGEJO_TOKEN" \
           -H 'Content-Type: application/json' \
           --data @release-body.json \
@@ -381,7 +525,7 @@ jobs:
   security-check:
     name: Security Check
     runs-on: [container, linux]
-    # See the guard on release-build: `linux-v*` releases are the Linux app's
+    # See the guard on dispatch-release-build: `linux-v*` releases are the Linux app's
     # own line and are verified by linux-release.yml.
     if: ${{ !startsWith(github.event.release.tag_name, 'linux-v') }}
 
@@ -398,7 +542,7 @@ jobs:
   documentation-check:
     name: Documentation Check
     runs-on: [container, linux]
-    # See the guard on release-build.
+    # See the guard on dispatch-release-build.
     if: ${{ !startsWith(github.event.release.tag_name, 'linux-v') }}
 
     steps:

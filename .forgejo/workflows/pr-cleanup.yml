@@ -39,7 +39,7 @@ jobs:
       - name: Configure AWS credentials
         uses: https://github.com/aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd  # v6.3.0
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::762672791738:role/ci-tempo-statusbar-pr
           aws-region: ${{ env.S3_REGION }}
 
       - name: Delete PR builds from S3

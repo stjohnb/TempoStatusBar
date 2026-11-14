@@ -27,7 +27,8 @@ jobs:
     timeout-minutes: 60
     # Forgejo mints an OIDC ID token only when this is set on the job (or
     # workflow); without it configure-aws-credentials finds no token. The
-    # issuer is https://www.bstjohn.net/forgejo-oidc (see s3-bootstrap.yml).
+    # issuer is https://www.bstjohn.net/forgejo-oidc; the role it assumes is
+    # owned by aws-account tier1/tempo-statusbar.tf.
     enable-openid-connect: true
     # contents dropped to read when DMG publishing moved from per-PR
     # pre-releases to S3 (#177); id-token: write is required for OIDC.
@@ -357,9 +358,24 @@ jobs:
     - name: Staple notarization ticket
       if: github.event.pull_request.head.repo.full_name == github.repository
       run: |
+        set -euo pipefail
+        retry() {
+          local delays=(15 30 60) attempt=1 rc
+          while true; do
+            "$@" && return 0
+            rc=$?
+            if [ "$attempt" -gt "${#delays[@]}" ]; then
+              echo "::error::$* failed after $attempt attempts (exit $rc)"
+              return "$rc"
+            fi
+            echo "::warning::$* failed (exit $rc), attempt $attempt; retrying in ${delays[$((attempt-1))]}s"
+            sleep "${delays[$((attempt-1))]}"
+            attempt=$((attempt+1))
+          done
+        }
         DMG="TempoStatusBarApp-${{ steps.version.outputs.version }}.dmg"
-        xcrun stapler staple "$DMG"
-        xcrun stapler validate "$DMG"
+        retry xcrun stapler staple "$DMG"
+        retry xcrun stapler validate "$DMG"
 
         # Final Gatekeeper assessment as an end-user would experience it
         spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
@@ -369,7 +385,7 @@ jobs:
       if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
       uses: https://github.com/aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd  # v6.3.0
       with:
-        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+        role-to-assume: arn:aws:iam::762672791738:role/ci-tempo-statusbar-pr
         aws-region: ${{ env.S3_REGION }}
 
     - name: Upload DMG to S3

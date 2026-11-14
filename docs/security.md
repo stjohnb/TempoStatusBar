@@ -17,8 +17,8 @@ None. No container image is published and no finding has been accepted. A new ac
 
 ### Secrets
 
-- CI secrets are Forgejo Actions secrets read through `${{ secrets.* }}`: `SIGNING_CERT_P12_BASE64`, `SIGNING_CERT_PASSWORD`, `KEYCHAIN_PASSWORD`, `DEVELOPMENT_TEAM`, `AC_API_KEY_ID`, `AC_API_ISSUER_ID`, `AC_API_KEY_P8_BASE64`, `AWS_ROLE_ARN`, and the one-off `AWS_BOOTSTRAP_ACCESS_KEY_ID` / `AWS_BOOTSTRAP_SECRET_ACCESS_KEY` used by `s3-bootstrap.yml`.
-- S3 access uses Forgejo OIDC with `AWS_ROLE_ARN`; no long-lived AWS keys exist outside the bootstrap workflow.
+- CI secrets are Forgejo Actions secrets read through `${{ secrets.* }}`: `SIGNING_CERT_P12_BASE64`, `SIGNING_CERT_PASSWORD`, `KEYCHAIN_PASSWORD`, `DEVELOPMENT_TEAM`, `AC_API_KEY_ID`, `AC_API_ISSUER_ID`, and `AC_API_KEY_P8_BASE64`.
+- S3 access uses Forgejo OIDC into `ci-tempo-statusbar-pr` (PR builds, `pr/*`) and `ci-tempo-statusbar-release` (releases, `releases/*`, `main` only), owned by aws-account `tier1/tempo-statusbar.tf`. No AWS keys exist for this repo.
 - The macOS user's Jira API token is stored in the Keychain under service `com.stjohnsoftware.TempoStatusBarApp`, account `credentials`, with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`.
 - The Linux app reads its token from Secret Service, `token_command` or `TEMPO_API_TOKEN`.
 - Rule for new code: never log or commit a credential value.
@@ -35,3 +35,4 @@ Nothing is reachable from the network: no listener, no ingress and no network po
 
 - Accepted: no container image is published, so the Trivy fs gate fails only on fixable CRITICAL findings, not HIGH; the contract's High/Critical block applies to image pushes.
 - Accepted: the only runner for this repo's Mac jobs (`[host, macos, tempo]`, one Intel MacBook Pro) is x86_64-darwin, and nixpkgs 26.05 is the last release that supports it, so SwiftLint and the AWS CLI there (`macos-tools`, from the `nixpkgs-darwin` input on `nixpkgs-26.05-darwin`) get no security fixes after the end of 2026. Both tools only read this repo's checkout and upload to the repo's own S3 bucket with short-lived OIDC credentials, on a LAN-only single-tenant forge. Move `nixpkgs-darwin` to a current branch when the runner is replaced by an Apple-silicon Mac.
+- Accepted: a same-repo PR's Forgejo job token has repo write, so a PR workflow could create a `v*` release or dispatch `release-tag.yml` on `main` and get a release upload through `ci-tempo-statusbar-release`. This is a property of Forgejo job tokens, it existed before the move to per-role exact-subject trust and that move does not widen it; the dispatched build's "Verify release for tag" step (published, non-draft `v*` release whose name equals its tag, run on `main`) limits it to real releases.
