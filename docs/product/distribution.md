@@ -47,6 +47,12 @@ completeness.
 **Supersedes:** the original #102/PR #104 design (token-gated checks against
 the private repo).
 
+### A PR build must never be able to publish or overwrite release artifacts
+
+CI access to the download bucket is split by purpose: PR runs may only touch PR-build downloads, and only the release path may write release downloads. No long-lived cloud credentials are held by CI or by agent sessions.
+
+**Why:** the owner moved this repo to purpose-scoped, centrally managed CI roles (replacing a self-bootstrapped role and admin keys) so that a same-repo PR run can never write `releases/*`, and so applying access changes needs no operator login.
+
 ### The public mirror only needs to carry the most recent release, not full history
 
 Mirroring the latest stable release is enough; there's no requirement to

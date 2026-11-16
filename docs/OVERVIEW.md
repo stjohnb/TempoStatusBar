@@ -374,4 +374,6 @@ Tests live in `TempoStatusBarAppTests/`. The custom shell script `run_tests.sh` 
 
 Claws generates this section from verified evidence only — `deploys` entries in `claws.json`, workflow dispatches, container image references in YAML manifests, and OIDC trust-policy subjects in Terraform/OpenTofu files. To change it, edit that evidence, not this section.
 
-No deployment, configuration or provisioning relationship with another managed repository was found in these evidence sources.
+**Deployed, configured or provisioned by:**
+
+- [St-John-Software/aws-account](https://git.home.bstjohn.net/St-John-Software/aws-account): [`tier1/tempo-statusbar.tf`](https://git.home.bstjohn.net/St-John-Software/aws-account/src/branch/main/tier1/tempo-statusbar.tf) (provisions, oidc)

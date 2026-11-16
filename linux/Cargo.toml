@@ -35,15 +35,15 @@ ksni = { version = "0.3.7", default-features = false, features = ["blocking", "a
 # preconfigured, so the system cert store is never consulted.
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "query", "rustls-no-provider"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
-webpki-roots = "1.0.11"
+webpki-roots = "1.0.12"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-toml = "1.2.0"
+toml = "1.2.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 # "v1" exposes the simple Entry API; the zbus store talks to the freedesktop
 # Secret Service without linking libdbus.
 keyring = { version = "4.2.0", default-features = false, features = ["v1", "zbus-secret-service-keyring-store"] }
 dirs = "7"
 clap = { version = "4.6.7", features = ["derive"] }
-rpassword = "7.5.4"
+rpassword = "7.5.5"
 thiserror = "2.0.21"
