@@ -151,8 +151,10 @@ mod tests {
         assert_eq!(pixel_at(&icon, 12, 12), COLOR_NEUTRAL);
         assert!(!icon
             .data
-            .chunks_exact(4)
-            .any(|p| u32::from_be_bytes(p.try_into().unwrap()) == FOREGROUND));
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|p| u32::from_be_bytes(*p) == FOREGROUND));
     }
 
     #[test]
@@ -165,8 +167,10 @@ mod tests {
             });
             assert!(
                 icon.data
-                    .chunks_exact(4)
-                    .any(|p| u32::from_be_bytes(p.try_into().unwrap()) == FOREGROUND),
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|p| u32::from_be_bytes(*p) == FOREGROUND),
                 "no digits drawn for {days} days"
             );
         }
