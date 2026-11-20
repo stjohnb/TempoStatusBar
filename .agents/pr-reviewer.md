@@ -53,6 +53,8 @@ Tempo API changes and `docs/ci-cd.md` for workflow changes.
   `TempoServiceProtocol`, `MockURLProtocol`) and live in
   `TempoStatusBarAppTests/`. Tests must exit non-zero on failure (see #109).
 - SwiftLint (`.swiftlint.yml`) must pass for Swift changes.
+- Do not flag that the author did not run Swift tests or SwiftLint locally —
+  agents work in a Linux pod without Xcode; the CI checks are the evidence.
 
 ## Fetch context before reviewing
 

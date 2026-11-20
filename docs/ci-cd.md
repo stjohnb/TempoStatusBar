@@ -17,6 +17,17 @@ cover the full development lifecycle: `pr-verification.yml`,
 
 `.github/` holds only the `setup-nix` composite action, which Forgejo workflows reference by path.
 
+### Linting workflows locally
+
+`nix develop .#lint --command actionlint` lints the workflows; no CI job runs
+it. The flake's Linux-only `lint` devShell provides `shellcheck` and an
+`actionlint` wrapper that, called with no arguments, lints every
+`.forgejo/workflows/*.yml`/`*.yaml` (pass file paths to lint only those), always
+with `-config-file .forgejo/actionlint.yaml`. That config declares the runner
+labels and ignores the Forgejo-specific false positives (full-URL `uses:`,
+`enable-openid-connect`) and shellcheck `info`-level notes; actionlint itself
+only auto-discovers `.github/workflows`.
+
 ### Common Settings (all workflows)
 
 - **Runners:** Self-hosted `[host, macos, tempo]` for build/test/quality jobs; `[container, linux]` for security scans, documentation checks, Linux CI/release, PR cleanup and the release dispatcher. `host` and `container` are the two runner families (host-mode Macs vs. in-cluster Linux containers) and share no label; jobs never use `self-hosted` or `beefy`. The label families and how to choose labels are documented canonically in fleet-infra's [docs/runner-labels.md](https://git.home.bstjohn.net/St-John-Software/fleet-infra/src/branch/main/docs/runner-labels.md). The `tempo` label pins these jobs to the Mac that does **not** run the real TempoStatusBarApp: signing jobs put a temp keychain into the runner user's keychain search list, and on a Mac where the real app is polling, that triggers keychain-unlock dialogs in the user's session. Signing no longer changes the default keychain (#234), but the `tempo` pin stays as defence in depth. Machine-level documentation for the two shared Macs — inventory, runner-label semantics, registration and Xcode-install runbooks — is centralised in the nixos-config repo: [docs/macos-runners.md](https://git.home.bstjohn.net/St-John-Software/nixos-config/src/branch/main/docs/macos-runners.md).

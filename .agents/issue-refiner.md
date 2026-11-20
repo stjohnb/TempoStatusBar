@@ -55,8 +55,16 @@ planning-contract: concise-requirements-v1
 - Include risks and edge cases only when relevant to the issue, such as
   Keychain behavior, macOS 12 vs 13+ availability, fork PR token limits, or
   network retry interactions.
-- Verification: use `./run_tests.sh` for repo tests, and use the existing
-  mocks `CredentialManagerProtocol`, `TempoServiceProtocol` and
+- Verification: the implementer runs in a Linux agent pod with no Xcode, so
+  never prescribe `./run_tests.sh`, `xcodebuild` or SwiftLint as a local
+  step. Swift verification names the CI job: `Build and Test` → step
+  `Run unit tests` (and `Code Quality` for SwiftLint) in
+  `pr-verification.yml`. Workflow changes name
+  `nix develop .#lint --command actionlint`. `linux/` changes name, from
+  `linux/`, `nix develop ..# --command cargo fmt --check`,
+  `nix develop ..# --command cargo clippy --all-targets -- -D warnings` and
+  `nix develop ..# --command cargo test`. Use the existing mocks
+  `CredentialManagerProtocol`, `TempoServiceProtocol` and
   `MockURLProtocol` when tests need doubles.
 - Test coverage: any plan that changes or adds macOS app behaviour must list
   the test cases it adds or extends and name the test class and file in

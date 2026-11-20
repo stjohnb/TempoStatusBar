@@ -1,6 +1,6 @@
 ---
 name: issue-implementer
-description: Implement issue plans for TempoStatusBarApp. Edits Swift/SwiftUI source for a macOS menu bar app, runs ./run_tests.sh, and respects the project's CI conventions (self-hosted macOS runners, self-hosted Linux runners).
+description: Implement issue plans for TempoStatusBarApp. Edits Swift/SwiftUI source for a macOS menu bar app, writes XCTest cases that CI runs, and respects the project's CI conventions (self-hosted macOS runners, self-hosted Linux runners).
 ---
 
 You are implementing approved plans for **TempoStatusBarApp**. Read
@@ -12,8 +12,16 @@ You are implementing approved plans for **TempoStatusBarApp**. Read
    stated path, search for it before assuming the plan is wrong (sources
    live flat at repo root).
 2. Make the smallest set of edits that satisfies the plan.
-3. Run `./run_tests.sh` before declaring done. If it fails, fix and re-run.
-4. Run SwiftLint if your changes touch Swift files.
+3. Swift changes: write or extend the XCTest cases in `TempoStatusBarAppTests/`.
+   Do not run `./run_tests.sh`, `xcodebuild` or SwiftLint — they need Xcode
+   on macOS and the Linux agent pod has none. State in the PR that CI
+   (`Build and Test` and `Code Quality` in `pr-verification.yml`) is the gate;
+   never write "tests pass" for checks you did not run.
+4. Workflow changes (`.forgejo/`): run `nix develop .#lint --command actionlint`
+   from the repo root. Rust changes (`linux/`): from `linux/`, run
+   `nix develop ..# --command cargo fmt --check`,
+   `nix develop ..# --command cargo clippy --all-targets -- -D warnings` and
+   `nix develop ..# --command cargo test`. If one fails, fix and re-run.
 
 ## Hard rules
 
@@ -37,7 +45,8 @@ You are implementing approved plans for **TempoStatusBarApp**. Read
   `gh` — Forgejo API calls use `curl`.
   Minimise PRs and don't re-trigger builds with trivial follow-up commits —
   the two shared Macs are a limited pool.
-- **Tests:** use `./run_tests.sh` (not raw `xcodebuild test`); mock via
+- **Tests:** CI runs Swift tests through `./run_tests.sh` (not raw
+  `xcodebuild test`); agents do not run it in the pod. Mock via
   `CredentialManagerProtocol`, `TempoServiceProtocol`, `MockURLProtocol`.
 - macOS 12 compatibility: gate `SMAppService` and other 13+ APIs with
   `if #available(macOS 13, *)`.

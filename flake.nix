@@ -82,6 +82,29 @@
         security = pkgs.mkShell {
           packages = [ pkgs.trivy ];
         };
+
+        # Workflow linter for agents and humans (not used by CI):
+        # `nix develop .#lint --command actionlint`. The wrapper points
+        # actionlint at .forgejo/workflows and .forgejo/actionlint.yaml,
+        # since actionlint only auto-discovers .github/workflows.
+        lint =
+          let
+            actionlint = pkgs.writeShellApplication {
+              name = "actionlint";
+              runtimeInputs = [ pkgs.git ];
+              text = ''
+                root=$(git rev-parse --show-toplevel)
+                if [ "$#" -eq 0 ]; then
+                  shopt -s nullglob
+                  set -- "$root"/.forgejo/workflows/*.yml "$root"/.forgejo/workflows/*.yaml
+                fi
+                exec ${pkgs.actionlint}/bin/actionlint -config-file "$root/.forgejo/actionlint.yaml" "$@"
+              '';
+            };
+          in
+          pkgs.mkShell {
+            packages = [ actionlint pkgs.shellcheck ];
+          };
       })
       # Darwin-only shell for interactive use (CI uses `macos-tools`): SwiftLint and the
       # AWS CLI, pinned by flake.lock instead of an unpinned `brew install`.

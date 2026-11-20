@@ -25,17 +25,32 @@ TempoStatusBar is primarily a macOS menu bar app that polls Jira Tempo Server/Da
 
 ## Automation Host Policy
 
-Claws agents work on a shared, resource-constrained automation host that also runs the
-Claws service itself. When working on this repo as an agent:
+Claws agents work in their own Kubernetes agent pod (Linux, 6 GiB memory limit), which has
+no Xcode and no macOS toolchain. When working on this repo as an agent:
 
 - **Do not start dev servers or other long-running processes** (`npm run dev`, `npm start`,
-  `docker compose up`, watchers, tunnels). Verify with fast one-shot checks — type-check,
-  lint, unit tests — and let CI run anything that needs a live app or an end-to-end browser.
-- **Do not install system packages or browser binaries** on the host: no `sudo`, no
-  `apt-get install`, no `npx playwright install`, no `brew install`. If CI needs a tool,
+  `docker compose up`, watchers, tunnels). Verify with fast one-shot checks — lint, unit
+  tests — and let CI run anything that needs a live app, a Mac or an end-to-end browser.
+- **Do not install system packages or browser binaries** in the pod: no `sudo`, no
+  `apt-get install`, no `npx playwright install`, no `brew install`. If a check needs a tool,
   add it to `flake.nix` in the same PR.
 - **Never kill a process or free a port you do not own.** `lsof -ti:PORT | xargs kill` and
-  `pkill -f node` will take down the Claws service, whose dashboard listens on port 3000.
+  `pkill -f node` kill the Claws helper processes that record your run.
+
+### What an agent can run
+
+- Workflow changes (`.forgejo/`): `nix develop .#lint --command actionlint` from the repo
+  root (lints every workflow against `.forgejo/actionlint.yaml`).
+- Rust changes (`linux/`), from `linux/`: `nix develop ..# --command cargo fmt --check`,
+  `nix develop ..# --command cargo clippy --all-targets -- -D warnings` and
+  `nix develop ..# --command cargo test`.
+
+### Left to CI
+
+- `./run_tests.sh`, `xcodebuild`, SwiftLint and code signing need Xcode on macOS and cannot
+  run in the pod. The `Build and Test` and `Code Quality` jobs of
+  `.forgejo/workflows/pr-verification.yml` run them on `[host, macos, tempo]`; say in the PR
+  that CI is the gate for Swift changes rather than claiming the tests ran.
 
 ## Security
 
