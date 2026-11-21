@@ -143,7 +143,7 @@ If the gate goes red, fix the dependency rather than loosening the gate.
 
 | Job | Runner | Description |
 |---|---|---|
-| `build-and-test` | `[container, linux]` | `cargo fmt --check` → `cargo clippy --all-targets -- -D warnings` → `cargo test` → `cargo build --release` |
+| `build-and-test` | `[container, linux]` | `cargo fmt --check` → `cargo clippy --locked --all-targets -- -D warnings` → `cargo test --locked` → `cargo build --release --locked` |
 | `security-scan` | `[container, linux]` | Trivy scan from the repo root (see [Trivy gating](#trivy-gating)) |
 
 Every step runs through `nix $NIX_FLAGS develop ..# --command …` from the

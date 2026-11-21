@@ -334,7 +334,7 @@ Six Forgejo Actions workflows in `.forgejo/workflows/` — see [ci-cd.md](ci-cd.
 
 | Workflow | Trigger | Key jobs |
 |---|---|---|
-| `linux-ci.yml` | PRs/pushes touching `linux/**`, `flake.nix`, `flake.lock` | `cargo fmt --check`, clippy, test, release build — all via `nix develop` on `[container, linux]` |
+| `linux-ci.yml` | PRs/pushes touching `linux/**`, `flake.nix`, `flake.lock` | `cargo fmt --check`, clippy, test, release build (with `--locked`) — all via `nix develop` on `[container, linux]` |
 | `linux-release.yml` | Push to `main` touching `linux/**`, `flake.nix`, `flake.lock`, manual | Version-gated: builds `.#static` (musl), asserts static linkage + `--version` match, tags `linux-vX.Y.Z`, publishes tarball + `.sha256` as Forgejo release assets via the API |
 | `pr-verification.yml` | PRs to `main` | Build+test (with signing), SwiftLint, Trivy scan, DMG upload to `s3://…/pr/<N>/`, PR comment |
 | `pr-cleanup.yml` | PR `closed` | Deletes the PR's `pr/<N>/` prefix from S3 |

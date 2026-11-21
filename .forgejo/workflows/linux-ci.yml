@@ -58,19 +58,19 @@ jobs:
       run: nix $NIX_FLAGS develop ..# --command cargo fmt --check
 
     - name: Clippy
-      run: nix $NIX_FLAGS develop ..# --command cargo clippy --all-targets -- -D warnings
+      run: nix $NIX_FLAGS develop ..# --command cargo clippy --locked --all-targets -- -D warnings
 
     - name: Test
-      run: nix $NIX_FLAGS develop ..# --command cargo test
+      run: nix $NIX_FLAGS develop ..# --command cargo test --locked
 
     - name: Build (release)
-      run: nix $NIX_FLAGS develop ..# --command cargo build --release
+      run: nix $NIX_FLAGS develop ..# --command cargo build --release --locked
 
     # `nix build .#static` builds with --no-default-features because GTK cannot
     # be statically linked. This is the cheap guard that a PR cannot break the
     # published release artifact before it is merged.
     - name: Build (no GUI — mirrors the static release build)
-      run: nix $NIX_FLAGS develop ..# --command cargo build --release --no-default-features
+      run: nix $NIX_FLAGS develop ..# --command cargo build --release --locked --no-default-features
 
     - name: Comment on PR with Linux build status
       # Fork PRs get no write token on Forgejo and can't comment. Separate

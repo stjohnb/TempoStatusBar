@@ -25,7 +25,7 @@ None. No container image is published and no finding has been accepted. A new ac
 
 ### Supply chain
 
-`linux/Cargo.lock` and `flake.lock` are committed. All remote actions are pinned to commit SHAs. SwiftLint and the AWS CLI on the shared Macs come from the flake's darwin-only `macos-tools` package (run with `nix shell`) (the `nixpkgs-darwin` input on `nixpkgs-26.05-darwin`, kept because the Mac runner is Intel), pinned by `flake.lock`, not from `brew install`. Renovate (fleet-infra) updates GitHub Actions pins and cargo dependencies, and its nix manager (enabled in the repo's `renovate.json`) maintains `flake.lock`. The macOS app has no third-party packages. Rule for new changes: pin new dependencies through a lockfile and new CI actions to a full commit SHA.
+`linux/Cargo.lock` and `flake.lock` are committed. Linux CI runs clippy, test and both release builds with `--locked`, so it fails if `linux/Cargo.lock` is out of date. All remote actions are pinned to commit SHAs. SwiftLint and the AWS CLI on the shared Macs come from the flake's darwin-only `macos-tools` package (run with `nix shell`) (the `nixpkgs-darwin` input on `nixpkgs-26.05-darwin`, kept because the Mac runner is Intel), pinned by `flake.lock`, not from `brew install`. Renovate (fleet-infra) updates GitHub Actions pins and cargo dependencies, and its nix manager (enabled in the repo's `renovate.json`) maintains `flake.lock`. The macOS app has no third-party packages. Rule for new changes: pin new dependencies through a lockfile and new CI actions to a full commit SHA.
 
 ### Exposure and authentication
 

@@ -252,11 +252,11 @@ any successful poll. Only `TempoError::NetworkError` triggers backoff — an HTT
 
 ```sh
 cd linux
-nix develop ..# --command cargo test
-nix develop ..# --command cargo clippy --all-targets -- -D warnings
-nix develop ..# --command cargo build --release
+nix develop ..# --command cargo test --locked
+nix develop ..# --command cargo clippy --locked --all-targets -- -D warnings
+nix develop ..# --command cargo build --release --locked
 # What `nix build .#static` compiles — no GTK in the dependency graph.
-nix develop ..# --command cargo build --release --no-default-features
+nix develop ..# --command cargo build --release --locked --no-default-features
 ```
 
 Or `nix build` from the repo root for the packaged binary, or `nix run` to

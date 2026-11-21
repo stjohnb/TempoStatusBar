@@ -60,10 +60,8 @@ planning-contract: concise-requirements-v1
   step. Swift verification names the CI job: `Build and Test` → step
   `Run unit tests` (and `Code Quality` for SwiftLint) in
   `pr-verification.yml`. Workflow changes name
-  `nix develop .#lint --command actionlint`. `linux/` changes name, from
-  `linux/`, `nix develop ..# --command cargo fmt --check`,
-  `nix develop ..# --command cargo clippy --all-targets -- -D warnings` and
-  `nix develop ..# --command cargo test`. Use the existing mocks
+  `nix develop .#lint --command actionlint`. `linux/` changes name the cargo
+  fmt, clippy and test commands from `AGENTS.md`. Use the existing mocks
   `CredentialManagerProtocol`, `TempoServiceProtocol` and
   `MockURLProtocol` when tests need doubles.
 - Test coverage: any plan that changes or adds macOS app behaviour must list

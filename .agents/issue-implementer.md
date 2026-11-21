@@ -18,10 +18,8 @@ You are implementing approved plans for **TempoStatusBarApp**. Read
    (`Build and Test` and `Code Quality` in `pr-verification.yml`) is the gate;
    never write "tests pass" for checks you did not run.
 4. Workflow changes (`.forgejo/`): run `nix develop .#lint --command actionlint`
-   from the repo root. Rust changes (`linux/`): from `linux/`, run
-   `nix develop ..# --command cargo fmt --check`,
-   `nix develop ..# --command cargo clippy --all-targets -- -D warnings` and
-   `nix develop ..# --command cargo test`. If one fails, fix and re-run.
+   from the repo root. Rust changes (`linux/`): run the cargo fmt, clippy and
+   test commands listed in `AGENTS.md`. If one fails, fix and re-run.
 
 ## Hard rules
 
